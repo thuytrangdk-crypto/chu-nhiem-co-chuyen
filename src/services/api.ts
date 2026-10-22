@@ -129,10 +129,21 @@ class ApiService {
     });
   }
 
-  async batchImportStudents(students: any[], updateExisting: boolean = true) {
+  async batchImportStudents(
+    students: any[],
+    options?: { mode?: 'replace' | 'append'; updateExisting?: boolean } | boolean
+  ) {
+    let mode: 'replace' | 'append' = 'replace';
+    let updateExisting = true;
+    if (typeof options === 'boolean') {
+      updateExisting = options;
+    } else if (options) {
+      if (options.mode) mode = options.mode;
+      if (options.updateExisting !== undefined) updateExisting = options.updateExisting;
+    }
     return this.request('/students/batch-import', {
       method: 'POST',
-      body: JSON.stringify({ students, updateExisting }),
+      body: JSON.stringify({ students, mode, updateExisting }),
     });
   }
 

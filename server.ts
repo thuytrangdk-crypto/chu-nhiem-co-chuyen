@@ -13,10 +13,23 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Ensure data directory exists
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+// Path normalization middleware for Vercel serverless functions
+// Ensures requests with or without /api prefix reach the right Express routes
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.url && !req.url.startsWith('/api') && !req.url.startsWith('/@') && !req.url.startsWith('/src') && !req.url.startsWith('/assets') && !req.url.startsWith('/favicon') && !req.url.startsWith('/public')) {
+    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+  }
+  next();
+});
+
+// Ensure data directory exists (use /tmp on Vercel serverless)
+const DATA_DIR = process.env.VERCEL ? path.join('/tmp', 'data') : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {
+    console.warn('Could not create DATA_DIR:', e);
+  }
 }
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
@@ -79,13 +92,13 @@ const initialDb = {
   version: 1,
   classSettings: {
     id: 'CLASS_CURRENT',
-    appName: 'Trợ lý chủ nhiệm',
-    schoolName: '',
-    className: 'Chưa đặt tên lớp',
-    homeroomTeacher: 'Chưa cập nhật GVCN',
+    appName: 'GVCN',
+    schoolName: 'THCS Nguyễn Huệ',
+    className: '9A12',
+    homeroomTeacher: 'Võ Kim Chuyền',
     academicYear: '2026-2027',
     logoUrl: '',
-    initialSetupDone: false,
+    initialSetupDone: true,
     attentionThresholdViolations: 2,
     attentionThresholdAbsences: 2,
     syncEnabled: false,
@@ -136,7 +149,59 @@ const initialDb = {
     { id: 'sub_mythuat', code: 'MT', name: 'Mĩ thuật', isGraded: false },
     { id: 'sub_hdtn', code: 'HDTN', name: 'HĐTN-HN', isGraded: false },
   ],
-  students: [] as Array<any>,
+  students: [
+    {
+      id: "stu_1792638158145_14ej0a",
+      code: "02102013",
+      fullName: "Huỳnh Ngọc Trâm Anh",
+      gender: "Nữ",
+      birthdate: "02/10/2013",
+      parentName: "Huỳnh Văn A",
+      parentPhone: "0901234567",
+      address: "TP. Hồ Chí Minh",
+      notes: "Lớp phó học tập",
+      internalNotes: "",
+      authHash: "51e5a4d5071eed20e9434f16a4d3fc84ebafd7314c41d204de4bb43fb690b26805d3b45ced8aaa17a1d8f0469ce0d042f72e2b839a48c30f7637326e0e158193",
+      authSalt: "710b1c5f91e274f78d7d5cb3a7e2055c",
+      mustChangePassword: false,
+      createdAt: "2026-10-22T03:02:38.145Z",
+      updatedAt: "2026-10-22T03:02:38.145Z",
+    },
+    {
+      id: "stu_1792638158157_z2ncek",
+      code: "27122013",
+      fullName: "Trần Ngô Quỳnh Anh",
+      gender: "Nữ",
+      birthdate: "27/12/2013",
+      parentName: "Trần Văn B",
+      parentPhone: "0912345678",
+      address: "TP. Hồ Chí Minh",
+      notes: "",
+      internalNotes: "",
+      authHash: "ea756fc216823407b918b070ffd0f48669fc35c2478d21417550a6cb4b664446b08b4d978d8e6266f91af0861c87d6e4b0476dc820287fb43dfaf78d2bf4c575",
+      authSalt: "a1afabf52295b435381ab640a5a15199",
+      mustChangePassword: false,
+      createdAt: "2026-10-22T03:02:38.157Z",
+      updatedAt: "2026-10-22T03:02:38.157Z",
+    },
+    {
+      id: "stu_1792638158168_5xyrq5",
+      code: "26052013",
+      fullName: "Nguyễn Gia Bảo",
+      gender: "Nam",
+      birthdate: "26/05/2013",
+      parentName: "Nguyễn Văn C",
+      parentPhone: "0923456789",
+      address: "TP. Hồ Chí Minh",
+      notes: "",
+      internalNotes: "",
+      authHash: "43d7be760869aca3cce6bd421764b31588fd15b0f27df26675cedcb19454063bbd0b0c0ab2a5526ee134b10e78e906c2020072363b789c78ad3dbe931996a7ed",
+      authSalt: "a8d32cdef1423ce720c9560f48b598fb",
+      mustChangePassword: false,
+      createdAt: "2026-10-22T03:02:38.168Z",
+      updatedAt: "2026-10-22T03:02:38.168Z",
+    },
+  ],
   attendance: {} as Record<string, Record<string, string>>, // date: { studentId: status }
   grades: {} as Record<string, Record<string, Record<string, number | null>>>, // month: { studentId: { subjectCode: grade } }
   incidents: [] as Array<any>,
@@ -307,7 +372,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     const student = db.students.find(s => {
       const cleanDob = (s.birthdate || '').replace(/\D/g, ''); // ddmmyyyy
       const expectedUsername = `${s.code}-${cleanDob}`.toLowerCase();
-      return expectedUsername === normalizedUsername || s.username?.toLowerCase() === normalizedUsername;
+      return expectedUsername === normalizedUsername || (s as any).username?.toLowerCase() === normalizedUsername;
     });
 
     if (!student) {
@@ -721,9 +786,9 @@ app.post('/api/students', authMiddleware, teacherOnly, (req: Request, res: Respo
   res.json({ success: true, student: safe });
 });
 
-// Batch Import Students
+// Batch Import Students (Supports both 'replace' and 'append' modes)
 app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Request, res: Response) => {
-  const { students, updateExisting } = req.body;
+  const { students, mode = 'replace', updateExisting = true } = req.body;
   if (!Array.isArray(students) || students.length === 0) {
     res.status(400).json({ error: 'Không có dữ liệu học sinh để nhập.' });
     return;
@@ -733,60 +798,137 @@ app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Reques
   let updatedCount = 0;
   const errors: string[] = [];
 
-  students.forEach((item, index) => {
-    const rowNum = index + 2;
-    if (!item.code || !item.fullName || !item.birthdate) {
-      errors.push(`Dòng ${rowNum}: Thiếu mã số, họ tên hoặc ngày sinh.`);
-      return;
-    }
-    const cleanCode = String(item.code).trim();
-    const cleanDob = String(item.birthdate).trim();
-    const cleanGender = (item.gender || '').toLowerCase().includes('nữ') ? 'Nữ' : 'Nam';
+  if (mode === 'replace') {
+    // Mode 1: Thay thế toàn bộ danh sách lớp
+    // Map existing students by code to preserve IDs / credentials where applicable
+    const existingMap = new Map(db.students.map(s => [s.code.trim().toLowerCase(), s]));
+    const newStudentsList: typeof db.students = [];
 
-    const existingIdx = db.students.findIndex(s => s.code.toLowerCase() === cleanCode.toLowerCase());
-    if (existingIdx >= 0) {
-      if (updateExisting) {
-        const current = db.students[existingIdx];
-        db.students[existingIdx] = {
-          ...current,
-          fullName: item.fullName.trim() || current.fullName,
-          gender: cleanGender,
-          birthdate: cleanDob || current.birthdate,
-          parentName: item.parentName ? item.parentName.trim() : current.parentName,
-          parentPhone: item.parentPhone ? String(item.parentPhone).trim() : current.parentPhone,
-          address: item.address ? item.address.trim() : current.address,
-          notes: item.notes ? item.notes.trim() : current.notes,
-          updatedAt: new Date().toISOString(),
-        };
-        updatedCount++;
+    students.forEach((item, index) => {
+      const rowNum = index + 2;
+      if (!item.code || !item.fullName || !item.birthdate) {
+        errors.push(`Dòng ${rowNum}: Thiếu mã số, họ tên hoặc ngày sinh.`);
+        return;
       }
-    } else {
-      const cleanDobDigits = cleanDob.replace(/\D/g, '');
-      const { hash, salt } = hashPassword(cleanDobDigits);
-      db.students.push({
-        id: `stu_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-        code: cleanCode,
-        fullName: item.fullName.trim(),
-        gender: cleanGender,
-        birthdate: cleanDob,
-        parentName: item.parentName ? item.parentName.trim() : '',
-        parentPhone: item.parentPhone ? String(item.parentPhone).trim() : '',
-        address: item.address ? item.address.trim() : '',
-        notes: item.notes ? item.notes.trim() : '',
-        internalNotes: '',
-        authHash: hash,
-        authSalt: salt,
-        mustChangePassword: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      addedCount++;
+      const cleanCode = String(item.code).trim();
+      const cleanDob = String(item.birthdate).trim();
+      const cleanGender = (item.gender || '').toLowerCase().includes('nữ') ? 'Nữ' : 'Nam';
+
+      const existing = existingMap.get(cleanCode.toLowerCase());
+      if (existing) {
+        newStudentsList.push({
+          ...existing,
+          code: cleanCode,
+          fullName: item.fullName.trim() || existing.fullName,
+          gender: cleanGender,
+          birthdate: cleanDob || existing.birthdate,
+          parentName: item.parentName ? item.parentName.trim() : existing.parentName,
+          parentPhone: item.parentPhone ? String(item.parentPhone).trim() : existing.parentPhone,
+          address: item.address ? item.address.trim() : existing.address,
+          notes: item.notes ? item.notes.trim() : existing.notes,
+          updatedAt: new Date().toISOString(),
+        });
+        updatedCount++;
+      } else {
+        const cleanDobDigits = cleanDob.replace(/\D/g, '') || '123456';
+        const { hash, salt } = hashPassword(cleanDobDigits);
+        newStudentsList.push({
+          id: `stu_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 6)}`,
+          code: cleanCode,
+          fullName: item.fullName.trim(),
+          gender: cleanGender,
+          birthdate: cleanDob,
+          parentName: item.parentName ? item.parentName.trim() : '',
+          parentPhone: item.parentPhone ? String(item.parentPhone).trim() : '',
+          address: item.address ? item.address.trim() : '',
+          notes: item.notes ? item.notes.trim() : '',
+          internalNotes: '',
+          authHash: hash,
+          authSalt: salt,
+          mustChangePassword: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        addedCount++;
+      }
+    });
+
+    // Invalidate sessions of students no longer in roster
+    const newIds = new Set(newStudentsList.map(s => s.id));
+    for (const [t, s] of sessions.entries()) {
+      if (s.studentId && !newIds.has(s.studentId)) {
+        sessions.delete(t);
+      }
     }
-  });
+
+    // Clean up seating chart assignments for removed students
+    if (db.seatingChart && db.seatingChart.seats) {
+      for (const [k, sId] of Object.entries(db.seatingChart.seats)) {
+        if (sId && !newIds.has(sId)) {
+          db.seatingChart.seats[k] = null;
+        }
+      }
+    }
+
+    db.students = newStudentsList;
+  } else {
+    // Mode 2: Bổ sung vào danh sách hiện có
+    students.forEach((item, index) => {
+      const rowNum = index + 2;
+      if (!item.code || !item.fullName || !item.birthdate) {
+        errors.push(`Dòng ${rowNum}: Thiếu mã số, họ tên hoặc ngày sinh.`);
+        return;
+      }
+      const cleanCode = String(item.code).trim();
+      const cleanDob = String(item.birthdate).trim();
+      const cleanGender = (item.gender || '').toLowerCase().includes('nữ') ? 'Nữ' : 'Nam';
+
+      const existingIdx = db.students.findIndex(s => s.code.toLowerCase() === cleanCode.toLowerCase());
+      if (existingIdx >= 0) {
+        if (updateExisting) {
+          const current = db.students[existingIdx];
+          db.students[existingIdx] = {
+            ...current,
+            fullName: item.fullName.trim() || current.fullName,
+            gender: cleanGender,
+            birthdate: cleanDob || current.birthdate,
+            parentName: item.parentName ? item.parentName.trim() : current.parentName,
+            parentPhone: item.parentPhone ? String(item.parentPhone).trim() : current.parentPhone,
+            address: item.address ? item.address.trim() : current.address,
+            notes: item.notes ? item.notes.trim() : current.notes,
+            updatedAt: new Date().toISOString(),
+          };
+          updatedCount++;
+        }
+      } else {
+        const cleanDobDigits = cleanDob.replace(/\D/g, '') || '123456';
+        const { hash, salt } = hashPassword(cleanDobDigits);
+        db.students.push({
+          id: `stu_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 6)}`,
+          code: cleanCode,
+          fullName: item.fullName.trim(),
+          gender: cleanGender,
+          birthdate: cleanDob,
+          parentName: item.parentName ? item.parentName.trim() : '',
+          parentPhone: item.parentPhone ? String(item.parentPhone).trim() : '',
+          address: item.address ? item.address.trim() : '',
+          notes: item.notes ? item.notes.trim() : '',
+          internalNotes: '',
+          authHash: hash,
+          authSalt: salt,
+          mustChangePassword: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        addedCount++;
+      }
+    });
+  }
 
   saveDatabase(db);
   res.json({
     success: true,
+    mode,
     addedCount,
     updatedCount,
     errors,
@@ -1404,7 +1546,13 @@ async function startServer() {
   });
 }
 
-startServer().catch(err => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// In local dev/container environments, start the HTTP server.
+// On Vercel, Vercel Serverless Function imports and handles the app instance directly.
+if (!process.env.VERCEL) {
+  startServer().catch(err => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}
+
+export default app;

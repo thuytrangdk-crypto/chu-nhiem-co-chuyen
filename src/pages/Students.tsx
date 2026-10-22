@@ -25,6 +25,10 @@ import {
   CheckCircle2,
   X,
   KeyRound,
+  ShieldCheck,
+  RotateCcw,
+  HelpCircle,
+  Shield,
 } from 'lucide-react';
 
 export const Students: React.FC = () => {
@@ -61,6 +65,8 @@ export const Students: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importingFile, setImportingFile] = useState<File | null>(null);
   const [previewStudents, setPreviewStudents] = useState<Array<Partial<Student>>>([]);
+  const [importMode, setImportMode] = useState<'replace' | 'append'>('replace');
+  const [showSecurityDetails, setShowSecurityDetails] = useState(false);
   const [updateExisting, setUpdateExisting] = useState(true);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importLoading, setImportLoading] = useState(false);
@@ -184,15 +190,35 @@ export const Students: React.FC = () => {
 
   const handleExecuteImport = async () => {
     if (previewStudents.length === 0) return;
+
+    if (importMode === 'replace') {
+      const confirmMsg =
+        students.length > 0
+          ? `XÁC NHẬN THAY THẾ TOÀN BỘ DANH SÁCH LỚP?\n\n- Toàn bộ ${students.length} học sinh hiện tại sẽ được thay thế.\n- Lớp sẽ chỉ lưu danh sách đúng ${previewStudents.length} học sinh từ file Excel này.\n\nThầy/Cô có chắc chắn muốn thực hiện?`
+          : `Xác nhận nạp ${previewStudents.length} học sinh từ file Excel vào lớp?`;
+      if (!window.confirm(confirmMsg)) return;
+    }
+
     setImportLoading(true);
     try {
-      const res = await api.batchImportStudents(previewStudents, updateExisting);
+      const res = await api.batchImportStudents(previewStudents, {
+        mode: importMode,
+        updateExisting: true,
+      });
       await refreshState();
-      alert(
-        `Nhập Excel thành công!\n- Thêm mới: ${res.addedCount} học sinh\n- Cập nhật: ${res.updatedCount} học sinh${
-          res.errors?.length ? `\n- Bỏ qua: ${res.errors.length} dòng lỗi` : ''
-        }`
-      );
+      if (importMode === 'replace') {
+        alert(
+          `Thay thế danh sách học sinh thành công!\n- Đã thiết lập lớp với: ${res.totalStudents} học sinh${
+            res.errors?.length ? `\n- Bỏ qua: ${res.errors.length} dòng lỗi` : ''
+          }`
+        );
+      } else {
+        alert(
+          `Bổ sung học sinh thành công!\n- Thêm mới: ${res.addedCount} học sinh\n- Cập nhật: ${res.updatedCount} học sinh\n- Tổng số học sinh: ${res.totalStudents} học sinh${
+            res.errors?.length ? `\n- Bỏ qua: ${res.errors.length} dòng lỗi` : ''
+          }`
+        );
+      }
       setIsImportModalOpen(false);
       setPreviewStudents([]);
       setImportingFile(null);
@@ -699,23 +725,170 @@ export const Students: React.FC = () => {
 
       {/* IMPORT EXCEL MODAL */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-3xl shadow-xl w-full max-w-2xl p-6 border border-pink-100 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-pink-50 mb-4">
-              <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-pink-600" />
-                <h3 className="font-bold text-gray-900 text-lg">Nhập danh sách học sinh từ Excel</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl p-6 sm:p-7 border border-pink-100 max-h-[92vh] overflow-y-auto space-y-5">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <FileSpreadsheet className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-extrabold text-gray-900 leading-tight">
+                    Nhập danh sách học sinh từ Excel
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Tự động tạo mã ID và cấp tài khoản đăng nhập học sinh theo Ngày sinh
+                  </p>
+                </div>
               </div>
               <button
-                onClick={() => setIsImportModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 p-1"
+                type="button"
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setPreviewStudents([]);
+                  setImportingFile(null);
+                }}
+                className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* Security Banner (Yellow/Amber container matching image) */}
+            <div className="rounded-2xl border-2 border-amber-300/80 bg-[#fffdf5] p-4 text-xs">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-amber-950 uppercase tracking-wide text-xs">
+                        YÊU CẦU &amp; QUY ĐỊNH BẢO MẬT TÀI KHOẢN HỌC SINH
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 uppercase">
+                        BẮT BUỘC
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSecurityDetails(!showSecurityDetails)}
+                      className="text-amber-900 hover:text-amber-950 font-bold hover:underline flex items-center gap-1 text-xs transition-colors"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                      <span>{showSecurityDetails ? 'Thu gọn quy định' : 'Xem chi tiết quy định'}</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 text-amber-900/90 leading-relaxed text-xs">
+                    <p className="flex items-start gap-1.5">
+                      <span className="shrink-0 text-sm">🔑</span>
+                      <span>
+                        <strong className="text-amber-950">Tài khoản &amp; Mật khẩu đăng nhập:</strong> Hệ thống sử dụng{' '}
+                        <u className="font-bold text-amber-950">cột Ngày tháng năm sinh</u> trong file Excel làm{' '}
+                        <strong className="text-amber-950">Tài khoản và Mật khẩu</strong> để học sinh đăng nhập.
+                      </span>
+                    </p>
+                    <p className="flex items-start gap-1.5">
+                      <span className="shrink-0 text-sm">🛡️</span>
+                      <span>
+                        <strong className="text-amber-950">Phân quyền riêng tư:</strong> Khi học sinh đăng nhập bằng ngày sinh, các em chỉ có thể xem{' '}
+                        <strong className="text-amber-950">hồ sơ của chính mình</strong>, thông tin hồ sơ của các bạn khác hoàn toàn bị khóa để bảo mật.
+                      </span>
+                    </p>
+                  </div>
+
+                  {showSecurityDetails && (
+                    <div className="mt-2.5 pt-2.5 border-t border-amber-200/80 text-[11px] text-amber-950 space-y-1 bg-amber-100/50 p-2.5 rounded-xl">
+                      <p className="font-bold">📋 Hướng dẫn định dạng &amp; an toàn dữ liệu:</p>
+                      <ul className="list-disc list-inside space-y-0.5 text-amber-900">
+                        <li>Định dạng ngày sinh chuẩn: <strong>DD/MM/YYYY</strong> (ví dụ: 02/10/2013). Khi đăng nhập, mật khẩu mặc định là 8 chữ số liền nhau (ví dụ: 02102013).</li>
+                        <li>Mã học sinh có thể để trống, hệ thống sẽ tự động gán theo ngày sinh hoặc mã lớp.</li>
+                        <li>Học sinh sẽ được yêu cầu đổi mật khẩu ở lần đăng nhập đầu tiên để bảo vệ quyền riêng tư cá nhân.</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Question & 2 Radio Options Card */}
+            <div className="rounded-2xl border border-gray-200 bg-slate-50/60 p-4 sm:p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs sm:text-sm font-extrabold text-gray-900">
+                  <HelpCircle className="w-4 h-4 text-blue-600" />
+                  <span>THẦY/CÔ MUỐN NHẬP DANH SÁCH HỌC SINH THEO HÌNH THỨC NÀO?</span>
+                </div>
+                <div className="text-xs text-gray-500 font-medium">
+                  Hiện có: <strong className="text-blue-600 font-bold">{students.length} học sinh</strong> trong lớp
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {/* Option 1: Thay the toan bo (Khuyen dung) */}
+                <div
+                  onClick={() => setImportMode('replace')}
+                  className={`cursor-pointer rounded-2xl p-4 transition-all text-left relative flex items-start gap-3 ${
+                    importMode === 'replace'
+                      ? 'border-2 border-red-500 bg-white ring-2 ring-red-500/15 shadow-sm'
+                      : 'border border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <div className="mt-0.5 shrink-0">
+                    {importMode === 'replace' ? (
+                      <div className="w-5 h-5 rounded-full border-2 border-red-500 flex items-center justify-center bg-white">
+                        <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                      </div>
+                    ) : (
+                      <div className="w-5 h-5 rounded-full border-2 border-gray-300" />
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="font-bold text-sm text-red-600 flex items-center gap-1.5">
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Thay thế toàn bộ danh sách lớp (Khuyên dùng)</span>
+                    </div>
+                    <p className="text-xs text-gray-600 leading-relaxed">
+                      Xóa sạch toàn bộ học sinh cũ hiện tại, <strong className="text-gray-900">chỉ lưu đúng danh sách học sinh từ file Excel này</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Option 2: Them bo sung */}
+                <div
+                  onClick={() => setImportMode('append')}
+                  className={`cursor-pointer rounded-2xl p-4 transition-all text-left relative flex items-start gap-3 ${
+                    importMode === 'append'
+                      ? 'border-2 border-emerald-500 bg-white ring-2 ring-emerald-500/15 shadow-sm'
+                      : 'border border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <div className="mt-0.5 shrink-0">
+                    {importMode === 'append' ? (
+                      <div className="w-5 h-5 rounded-full border-2 border-emerald-500 flex items-center justify-center bg-white">
+                        <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                      </div>
+                    ) : (
+                      <div className="w-5 h-5 rounded-full border-2 border-gray-300" />
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="font-bold text-sm text-gray-800 flex items-center gap-1.5">
+                      <UserPlus className="w-4 h-4 text-emerald-600" />
+                      <span>Thêm bổ sung vào danh sách hiện có</span>
+                    </div>
+                    <p className="text-xs text-gray-600 leading-relaxed">
+                      Giữ lại <strong className="text-gray-900">{students.length} học sinh cũ</strong>, chỉ nạp thêm học sinh mới từ file Excel.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Template Download & File Picker */}
             <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-pink-50/60 border border-pink-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="p-3.5 rounded-2xl bg-pink-50/60 border border-pink-200 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <div className="text-xs text-gray-700">
                   <p className="font-bold">Chưa có tệp Excel đúng mẫu?</p>
                   <p className="text-gray-500 mt-0.5">
@@ -723,6 +896,7 @@ export const Students: React.FC = () => {
                   </p>
                 </div>
                 <button
+                  type="button"
                   onClick={downloadStudentTemplate}
                   className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-pink-300 text-pink-700 text-xs font-bold hover:bg-pink-100 transition-colors shrink-0"
                 >
@@ -732,84 +906,145 @@ export const Students: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5">
-                  Chọn tệp Excel (.xlsx, .xls)
+                <label className="block text-xs font-bold text-gray-700 uppercase mb-2">
+                  CHỌN TỆP EXCEL (.XLSX, .XLS)
                 </label>
-                <input
-                  type="file"
-                  accept=".xlsx, .xls"
-                  onChange={handleFileSelect}
-                  className="w-full text-xs text-gray-500 file:mr-3 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-pink-600 file:text-white hover:file:bg-pink-700 cursor-pointer"
-                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="cursor-pointer px-4 py-2.5 rounded-xl bg-[#c2185b] hover:bg-[#ad1457] text-white text-xs font-bold transition-colors shadow-xs inline-flex items-center gap-2">
+                    <Upload className="w-4 h-4" />
+                    <span>Chọn tệp</span>
+                    <input
+                      type="file"
+                      accept=".xlsx, .xls"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                  </label>
+                  <span className="text-xs text-gray-600 font-medium truncate max-w-md">
+                    {importingFile ? (
+                      <span className="text-pink-700 font-bold underline">{importingFile.name}</span>
+                    ) : (
+                      'Không có tệp nào được chọn'
+                    )}
+                  </span>
+                </div>
               </div>
 
+              {/* Preview Table */}
               {previewStudents.length > 0 && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-gray-800">
                       Xem trước ({previewStudents.length} học sinh sẵn sàng nhập):
                     </span>
-                    <label className="flex items-center gap-2 text-xs font-semibold text-gray-700">
-                      <input
-                        type="checkbox"
-                        checked={updateExisting}
-                        onChange={e => setUpdateExisting(e.target.checked)}
-                        className="rounded-sm text-pink-600"
-                      />
-                      <span>Cập nhật nếu trùng mã</span>
-                    </label>
+                    {importMode === 'append' && (
+                      <label className="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={updateExisting}
+                          onChange={e => setUpdateExisting(e.target.checked)}
+                          className="rounded-sm text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span>Cập nhật thông tin nếu trùng mã học sinh</span>
+                      </label>
+                    )}
                   </div>
 
-                  <div className="max-h-56 overflow-y-auto border border-pink-100 rounded-xl">
+                  <div className="max-h-52 overflow-y-auto border border-pink-100 rounded-2xl">
                     <table className="w-full text-left text-xs border-collapse">
-                      <thead className="bg-pink-50 sticky top-0 font-bold text-gray-700">
+                      <thead className="bg-pink-50 sticky top-0 font-bold text-gray-700 z-10">
                         <tr>
-                          <th className="p-2">STT</th>
-                          <th className="p-2">Mã</th>
-                          <th className="p-2">Họ và tên</th>
-                          <th className="p-2">Phái</th>
-                          <th className="p-2">Ngày sinh</th>
-                          <th className="p-2">SĐT</th>
+                          <th className="p-2.5">STT</th>
+                          <th className="p-2.5">Mã</th>
+                          <th className="p-2.5">Họ và tên</th>
+                          <th className="p-2.5">Phái</th>
+                          <th className="p-2.5">Ngày sinh</th>
+                          <th className="p-2.5">SĐT</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pink-50">
                         {previewStudents.slice(0, 20).map((p, idx) => (
                           <tr key={idx} className="hover:bg-pink-50/20">
-                            <td className="p-2 text-gray-400">{idx + 1}</td>
-                            <td className="p-2 font-mono font-bold text-pink-700">{p.code}</td>
-                            <td className="p-2 font-bold uppercase">{p.fullName}</td>
-                            <td className="p-2">{p.gender}</td>
-                            <td className="p-2">{p.birthdate}</td>
-                            <td className="p-2 text-gray-500">{p.parentPhone || '---'}</td>
+                            <td className="p-2.5 text-gray-400 font-mono">{idx + 1}</td>
+                            <td className="p-2.5 font-mono font-bold text-pink-700">{p.code}</td>
+                            <td className="p-2.5 font-bold uppercase">{p.fullName}</td>
+                            <td className="p-2.5">{p.gender}</td>
+                            <td className="p-2.5 font-mono text-gray-700">{p.birthdate}</td>
+                            <td className="p-2.5 text-gray-500 font-mono">{p.parentPhone || '---'}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                   {previewStudents.length > 20 && (
-                    <p className="text-[11px] text-gray-400 mt-1 italic">
+                    <p className="text-[11px] text-gray-400 italic">
                       ... và {previewStudents.length - 20} học sinh khác nữa
                     </p>
                   )}
                 </div>
               )}
+            </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">
+            {/* Modal Footer matching screenshot */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-gray-100">
+              {/* Left mode status indicator badge */}
+              <div className="flex items-center gap-2 text-xs">
+                <span className="font-semibold text-gray-500">Chế độ thực hiện:</span>
+                {importMode === 'replace' ? (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 border border-rose-200 text-rose-700">
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>THAY THẾ TOÀN BỘ (Chỉ giữ {previewStudents.length} học sinh mới)</span>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 border border-emerald-200 text-emerald-700">
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>BỔ SUNG VÀO LỚP (Cộng thêm vào danh sách hiện có)</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Right action buttons */}
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setIsImportModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 rounded-xl"
+                  onClick={() => {
+                    setIsImportModalOpen(false);
+                    setPreviewStudents([]);
+                    setImportingFile(null);
+                  }}
+                  className="px-5 py-2.5 text-xs sm:text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
                 >
                   Hủy
                 </button>
-                <button
-                  type="button"
-                  disabled={previewStudents.length === 0 || importLoading}
-                  onClick={handleExecuteImport}
-                  className="px-5 py-2.5 text-xs font-bold text-white bg-[#e25d7c] hover:bg-[#d44b6b] rounded-xl shadow-xs disabled:opacity-50 transition-colors"
-                >
-                  {importLoading ? 'Đang nhập dữ liệu...' : `Tiến hành nhập (${previewStudents.length})`}
-                </button>
+                {importMode === 'replace' ? (
+                  <button
+                    type="button"
+                    disabled={previewStudents.length === 0 || importLoading}
+                    onClick={handleExecuteImport}
+                    className="px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-[#f06575] hover:bg-[#e05364] rounded-xl shadow-xs disabled:opacity-50 transition-colors flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>
+                      {importLoading
+                        ? 'Đang thay thế...'
+                        : `Xác nhận THAY THẾ bằng ${previewStudents.length} học sinh`}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={previewStudents.length === 0 || importLoading}
+                    onClick={handleExecuteImport}
+                    className="px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs disabled:opacity-50 transition-colors flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>
+                      {importLoading
+                        ? 'Đang bổ sung...'
+                        : `Xác nhận BỔ SUNG ${previewStudents.length} học sinh`}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
