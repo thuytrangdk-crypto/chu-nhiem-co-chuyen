@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #feeae9;
+    color: #1f2937;
+  }
+}
+
+/* Custom soft pink theme classes */
+.app-bg {
+  background-color: #feeae9;
+}
+
+.card-white {
+  background-color: #ffffff;
+  border-color: #fbdad8;
+}

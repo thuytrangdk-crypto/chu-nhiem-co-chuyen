@@ -1,0 +1,8 @@
+{
+  "name": "GVCN",
+  "description": "Ứng dụng web Trợ lý chủ nhiệm lớp học hoàn chỉnh, quản lý học sinh, điểm danh, nề nếp thi đua, bảng điểm học tập, bảng tin và sơ đồ lớp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
