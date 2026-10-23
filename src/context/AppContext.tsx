@@ -159,6 +159,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [token, refreshState]);
 
+  // For students, landing directly on Bulletin & Seating is intuitive
+  useEffect(() => {
+    if (role === 'student' && activeTab === 'dashboard') {
+      setActiveTab('bulletin');
+    }
+  }, [role, activeTab]);
+
   // Handle open student profile
   const openStudentProfile = (studentId: string) => {
     setSelectedStudentId(studentId);

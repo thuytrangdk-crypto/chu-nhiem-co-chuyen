@@ -153,7 +153,9 @@ export const Sidebar: React.FC<Props> = ({ isOpenMobile, onCloseMobile }) => {
           {/* Navigation Menu */}
           <nav className="p-3 space-y-1 flex-1">
             {navItems.map(item => {
-              const isActive = activeTab === item.id;
+              const isActive =
+                activeTab === item.id ||
+                (item.id === 'students' && activeTab === 'student_profile');
               return (
                 <button
                   key={item.id}
@@ -191,23 +193,23 @@ export const Sidebar: React.FC<Props> = ({ isOpenMobile, onCloseMobile }) => {
               <span>{role === 'teacher' ? 'Đổi mật khẩu GV' : 'Đổi mật khẩu'}</span>
             </button>
 
-            {/* Supabase Cloud Link */}
-            <button
-              onClick={() => {
-                if (role === 'teacher') handleNav('settings');
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-pink-50/60 rounded-xl transition-all"
-            >
-              <div className="flex items-center gap-3">
-                <Cloud className="w-4 h-4 text-gray-400" />
-                <span>Supabase Cloud</span>
-              </div>
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  supabaseStatus.connected ? 'bg-emerald-500' : 'bg-gray-300'
-                }`}
-              ></span>
-            </button>
+            {/* Supabase Cloud Link (Teacher Only) */}
+            {role === 'teacher' && (
+              <button
+                onClick={() => handleNav('settings')}
+                className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-pink-50/60 rounded-xl transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <Cloud className="w-4 h-4 text-gray-400" />
+                  <span>Supabase Cloud</span>
+                </div>
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    supabaseStatus.connected ? 'bg-emerald-500' : 'bg-gray-300'
+                  }`}
+                ></span>
+              </button>
+            )}
 
             {/* Settings for Teacher */}
             {role === 'teacher' && (

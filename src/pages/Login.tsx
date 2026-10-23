@@ -5,8 +5,11 @@ import { Role } from '../types';
 import { GraduationCap, ShieldCheck, User, KeyRound, ArrowRight, AlertCircle, Info } from 'lucide-react';
 
 export const Login: React.FC = () => {
-  const { login } = useAuth();
-  const [selectedRole, setSelectedRole] = useState<Role>('teacher');
+  const { login, authError, setAuthError } = useAuth();
+  const [selectedRole, setSelectedRole] = useState<Role>(() => {
+    const saved = localStorage.getItem('gvcn_active_login_role');
+    return saved === 'student' ? 'student' : 'teacher';
+  });
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
@@ -38,16 +41,28 @@ export const Login: React.FC = () => {
     }).catch(() => {});
   }, []);
 
+  const handleRoleChange = (role: Role) => {
+    setSelectedRole(role);
+    localStorage.setItem('gvcn_active_login_role', role);
+    setError(null);
+    if (setAuthError) setAuthError(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (setAuthError) setAuthError(null);
     setLoading(true);
 
     try {
       if (selectedRole === 'teacher') {
         await login({ role: 'teacher', password });
       } else {
-        await login({ role: 'student', username, password });
+        await login({
+          role: 'student',
+          username: username.trim(),
+          password: password.trim(),
+        });
       }
     } catch (err: any) {
       setError(err.message || 'Đăng nhập không thành công.');
@@ -82,10 +97,7 @@ export const Login: React.FC = () => {
           <div className="flex bg-[#feeae9] p-1 rounded-2xl mb-6 border border-[#fbdad8]">
             <button
               type="button"
-              onClick={() => {
-                setSelectedRole('teacher');
-                setError(null);
-              }}
+              onClick={() => handleRoleChange('teacher')}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                 selectedRole === 'teacher'
                   ? 'bg-white text-[#c02d4f] shadow-xs'
@@ -97,10 +109,7 @@ export const Login: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setSelectedRole('student');
-                setError(null);
-              }}
+              onClick={() => handleRoleChange('student')}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                 selectedRole === 'student'
                   ? 'bg-white text-[#c02d4f] shadow-xs'
@@ -122,10 +131,12 @@ export const Login: React.FC = () => {
             </div>
           )}
 
-          {error && (
-            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+          {(error || authError) && (
+            <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-start gap-2.5 shadow-2xs animate-fadeIn">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+              <div className="flex-1 leading-relaxed font-medium">
+                {error || authError}
+              </div>
             </div>
           )}
 
@@ -163,11 +174,11 @@ export const Login: React.FC = () => {
                     required
                     value={username}
                     onChange={e => setUsername(e.target.value)}
-                    placeholder="Ví dụ: 02102013-02102013 hoặc HS001-02102013"
+                    placeholder="Ví dụ: 22122012 hoặc 22122012-22122012"
                     className="w-full px-4 py-3 rounded-2xl border-2 border-[#fbdad8] focus:outline-hidden focus:border-[#e27388] focus:ring-4 focus:ring-[#feeae9] text-sm font-medium text-gray-800 placeholder-gray-400 transition-all"
                   />
-                  <p className="mt-1 text-[11px] text-gray-500">
-                    Định dạng: <code>[mã số]-[ddmmyyyy]</code> (mã hồ sơ và ngày sinh)
+                  <p className="mt-1.5 text-[11px] text-gray-500">
+                    Định dạng: Mã học sinh (ví dụ: <code>22122012</code>) hoặc <code>[mã số]-[ngày sinh]</code>
                   </p>
                 </div>
 
@@ -181,15 +192,15 @@ export const Login: React.FC = () => {
                       required
                       value={password}
                       onChange={e => setPassword(e.target.value)}
-                      placeholder="Mặc định là ngày sinh (ddmmyyyy)"
+                      placeholder="Mặc định là ngày sinh (vd: 22122012 hoặc 22/12/2012)"
                       className="w-full px-4 py-3 rounded-2xl border-2 border-[#fbdad8] focus:outline-hidden focus:border-[#e27388] focus:ring-4 focus:ring-[#feeae9] text-sm font-medium text-gray-800 placeholder-gray-400 transition-all pr-11"
                     />
                     <div className="absolute inset-y-0 right-0 flex items-center pr-3.5 pointer-events-none text-[#e27388]">
                       <KeyRound className="w-5 h-5" />
                     </div>
                   </div>
-                  <p className="mt-1 text-[11px] text-gray-500">
-                    Mật khẩu ban đầu là ngày sinh gồm 8 số (ví dụ: 02102013)
+                  <p className="mt-1.5 text-[11px] text-gray-500">
+                    Mật khẩu ban đầu là ngày sinh gồm 8 số hoặc có dấu / (ví dụ: <code>22122012</code> hoặc <code>22/12/2012</code>)
                   </p>
                 </div>
               </>

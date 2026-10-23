@@ -13,6 +13,9 @@ import {
   AlertCircle,
   Plus,
   Trash2,
+  Edit2,
+  Check,
+  X,
   Cloud,
   Download,
   Upload,
@@ -58,6 +61,12 @@ export const Settings: React.FC = () => {
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleType, setNewRuleType] = useState<'violation' | 'award'>('violation');
   const [newRulePoints, setNewRulePoints] = useState(-2);
+
+  // Edit Existing Rule state
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [editingRuleName, setEditingRuleName] = useState('');
+  const [editingRuleType, setEditingRuleType] = useState<'violation' | 'award'>('violation');
+  const [editingRulePoints, setEditingRulePoints] = useState<number>(-2);
 
   // Supabase state
   const [supabaseUrl, setSupabaseUrl] = useState('');
@@ -125,25 +134,125 @@ export const Settings: React.FC = () => {
     }
   };
 
-  const handleAddRule = () => {
+  const handleAddRule = async () => {
     if (!newRuleName.trim()) return;
+    const finalPoints =
+      newRuleType === 'violation' ? -Math.abs(Number(newRulePoints) || 1) : Math.abs(Number(newRulePoints) || 1);
     const newRule: EmulationRule = {
       id: `rule_${Date.now()}`,
       name: newRuleName.trim(),
       type: newRuleType,
-      points: Number(newRulePoints),
+      points: finalPoints,
       active: true,
     };
-    setRules([newRule, ...rules]);
+    const updated = [newRule, ...rules];
+    setRules(updated);
     setNewRuleName('');
+    try {
+      await api.updateEmulationSettings({
+        rules: updated,
+        settings: {
+          startingScore,
+          thresholdGood,
+          thresholdFair,
+          thresholdPass,
+        },
+      });
+      await refreshState();
+      setStatusMsg({ type: 'ok', text: 'Đã thêm và lưu tiêu chí mới thành công!' });
+      setTimeout(() => setStatusMsg(null), 2500);
+    } catch (err: any) {
+      console.warn('Auto-save rule failed:', err);
+    }
   };
 
-  const handleDeleteRule = (id: string) => {
-    setRules(rules.filter(r => r.id !== id));
+  const handleStartEditRule = (rule: EmulationRule) => {
+    setEditingRuleId(rule.id);
+    setEditingRuleName(rule.name);
+    setEditingRuleType(rule.type);
+    setEditingRulePoints(rule.points);
   };
 
-  const handleToggleRuleActive = (id: string) => {
-    setRules(rules.map(r => (r.id === id ? { ...r, active: !r.active } : r)));
+  const handleCancelEditRule = () => {
+    setEditingRuleId(null);
+    setEditingRuleName('');
+  };
+
+  const handleSaveEditRule = async (id: string) => {
+    if (!editingRuleName.trim()) return;
+    const finalPoints =
+      editingRuleType === 'violation'
+        ? -Math.abs(Number(editingRulePoints) || 1)
+        : Math.abs(Number(editingRulePoints) || 1);
+
+    const updated = rules.map(r =>
+      r.id === id
+        ? {
+            ...r,
+            name: editingRuleName.trim(),
+            type: editingRuleType,
+            points: finalPoints,
+          }
+        : r
+    );
+    setRules(updated);
+    setEditingRuleId(null);
+
+    try {
+      await api.updateEmulationSettings({
+        rules: updated,
+        settings: {
+          startingScore,
+          thresholdGood,
+          thresholdFair,
+          thresholdPass,
+        },
+      });
+      await refreshState();
+      setStatusMsg({ type: 'ok', text: 'Đã lưu chỉnh sửa tiêu chí thành công!' });
+      setTimeout(() => setStatusMsg(null), 2500);
+    } catch (err: any) {
+      setStatusMsg({ type: 'err', text: err.message || 'Lỗi lưu tiêu chí.' });
+    }
+  };
+
+  const handleDeleteRule = async (id: string) => {
+    const updated = rules.filter(r => r.id !== id);
+    setRules(updated);
+    if (editingRuleId === id) setEditingRuleId(null);
+    try {
+      await api.updateEmulationSettings({
+        rules: updated,
+        settings: {
+          startingScore,
+          thresholdGood,
+          thresholdFair,
+          thresholdPass,
+        },
+      });
+      await refreshState();
+      setStatusMsg({ type: 'ok', text: 'Đã xóa tiêu chí thành công!' });
+      setTimeout(() => setStatusMsg(null), 2000);
+    } catch (err: any) {
+      console.warn('Auto-save delete failed:', err);
+    }
+  };
+
+  const handleToggleRuleActive = async (id: string) => {
+    const updated = rules.map(r => (r.id === id ? { ...r, active: !r.active } : r));
+    setRules(updated);
+    try {
+      await api.updateEmulationSettings({
+        rules: updated,
+        settings: {
+          startingScore,
+          thresholdGood,
+          thresholdFair,
+          thresholdPass,
+        },
+      });
+      await refreshState();
+    } catch (err: any) {}
   };
 
   // Test Supabase
@@ -629,48 +738,146 @@ export const Settings: React.FC = () => {
               </div>
 
               {/* Rules List */}
-              <div className="divide-y divide-pink-50 max-h-80 overflow-y-auto border border-pink-100 rounded-2xl">
-                {rules.map(r => (
-                  <div
-                    key={r.id}
-                    className="p-3 flex items-center justify-between text-xs hover:bg-pink-50/20"
-                  >
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={r.active}
-                        onChange={() => handleToggleRuleActive(r.id)}
-                        className="rounded text-pink-600"
-                      />
-                      <span
-                        className={`font-bold ${
-                          r.type === 'violation' ? 'text-rose-600' : 'text-emerald-600'
-                        }`}
-                      >
-                        {r.type === 'violation' ? '[Vi phạm]' : '[Khen thưởng]'}
-                      </span>
-                      <span className={`font-semibold ${r.active ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
-                        {r.name}
-                      </span>
-                    </div>
+              <div className="divide-y divide-pink-50 max-h-96 overflow-y-auto border border-pink-100 rounded-2xl bg-white shadow-2xs">
+                {rules.map(r => {
+                  const isEditing = editingRuleId === r.id;
 
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={`font-black ${
-                          r.points < 0 ? 'text-rose-600' : 'text-emerald-600'
-                        }`}
+                  if (isEditing) {
+                    return (
+                      <div
+                        key={r.id}
+                        className="p-3 bg-pink-50/60 border-l-4 border-l-pink-500 space-y-2 text-xs animate-fadeIn"
                       >
-                        {r.points > 0 ? `+${r.points}đ` : `${r.points}đ`}
-                      </span>
-                      <button
-                        onClick={() => handleDeleteRule(r.id)}
-                        className="text-gray-400 hover:text-rose-600 p-1"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                        <div className="flex items-center justify-between font-bold text-gray-700">
+                          <span className="flex items-center gap-1.5 text-pink-700">
+                            <Edit2 className="w-3.5 h-3.5 text-pink-600" />
+                            Chỉnh sửa tiêu chí thi đua
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                          <div className="sm:col-span-3">
+                            <select
+                              value={editingRuleType}
+                              onChange={e => {
+                                const newType = e.target.value as 'violation' | 'award';
+                                setEditingRuleType(newType);
+                                if (newType === 'violation' && editingRulePoints > 0) {
+                                  setEditingRulePoints(-editingRulePoints);
+                                } else if (newType === 'award' && editingRulePoints < 0) {
+                                  setEditingRulePoints(Math.abs(editingRulePoints));
+                                }
+                              }}
+                              className="w-full px-2.5 py-1.5 rounded-xl border border-pink-200 text-xs bg-white font-medium focus:ring-2 focus:ring-pink-300 focus:outline-hidden"
+                            >
+                              <option value="violation">Lỗi vi phạm (- điểm)</option>
+                              <option value="award">Khen thưởng (+ điểm)</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-5">
+                            <input
+                              type="text"
+                              value={editingRuleName}
+                              onChange={e => setEditingRuleName(e.target.value)}
+                              placeholder="Tên tiêu chí vi phạm / khen thưởng..."
+                              className="w-full px-3 py-1.5 rounded-xl border border-pink-200 text-xs bg-white font-medium focus:ring-2 focus:ring-pink-300 focus:outline-hidden"
+                              autoFocus
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <input
+                              type="number"
+                              step="any"
+                              value={editingRulePoints}
+                              onChange={e => setEditingRulePoints(parseFloat(e.target.value) || 0)}
+                              placeholder="Điểm"
+                              className="w-full px-2 py-1.5 rounded-xl border border-pink-200 text-xs font-bold bg-white text-center focus:ring-2 focus:ring-pink-300 focus:outline-hidden"
+                            />
+                          </div>
+                          <div className="sm:col-span-2 flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditRule(r.id)}
+                              className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs"
+                              title="Lưu thay đổi"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Lưu</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCancelEditRule}
+                              className="px-2 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-medium flex items-center gap-1 transition-colors"
+                              title="Hủy bỏ"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              <span>Hủy</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={r.id}
+                      className="p-3 flex items-center justify-between text-xs hover:bg-pink-50/20 transition-colors group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={r.active}
+                          onChange={() => handleToggleRuleActive(r.id)}
+                          className="rounded text-pink-600 focus:ring-pink-500 shrink-0 cursor-pointer"
+                        />
+                        <span
+                          className={`font-bold shrink-0 ${
+                            r.type === 'violation' ? 'text-rose-600' : 'text-emerald-600'
+                          }`}
+                        >
+                          {r.type === 'violation' ? '[Vi phạm]' : '[Khen thưởng]'}
+                        </span>
+                        <span
+                          className={`font-semibold truncate ${
+                            r.active ? 'text-gray-800' : 'text-gray-400 line-through'
+                          }`}
+                        >
+                          {r.name}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`font-black min-w-[36px] text-right mr-1 ${
+                            r.points < 0 ? 'text-rose-600' : 'text-emerald-600'
+                          }`}
+                        >
+                          {r.points > 0 ? `+${r.points}đ` : `${r.points}đ`}
+                        </span>
+
+                        {/* Nút Chỉnh sửa tiêu chí cạnh thùng rác */}
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditRule(r)}
+                          title="Chỉnh sửa tiêu chí"
+                          className="text-gray-400 hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50 transition-colors"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Nút Thùng rác (Xóa tiêu chí) */}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRule(r.id)}
+                          title="Xóa tiêu chí"
+                          className="text-gray-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

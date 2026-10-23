@@ -77,37 +77,70 @@ async function sessionRequest(query: string, options: RequestInit = {}) {
 }
 const sessions = {
   async set(token: string, session: Session) {
-    if (!sessionConfig()) { localSessions.set(token, session); return; }
-    // Store only the digest of the bearer token in Supabase.
-    const { token: _token, ...data } = session;
-    await sessionRequest('', {
-      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ id: sessionId(token), data, updated_at: new Date().toISOString() }),
-    });
+    localSessions.set(token, session);
+    if (!sessionConfig()) return;
+    try {
+      // Store only the digest of the bearer token in Supabase.
+      const { token: _token, ...data } = session;
+      await sessionRequest('', {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ id: sessionId(token), data, updated_at: new Date().toISOString() }),
+      });
+    } catch (e: any) {
+      console.warn('Could not persist session to Supabase:', e?.message || e);
+    }
   },
   async get(token: string): Promise<Session | undefined> {
-    if (!sessionConfig()) return localSessions.get(token);
-    const response = await sessionRequest(`?id=eq.${sessionId(token)}&select=data`);
-    const rows = await response.json();
-    return rows[0]?.data ? { ...rows[0].data, token } : undefined;
+    const local = localSessions.get(token);
+    if (local && local.expiresAt > Date.now()) {
+      return local;
+    }
+    if (!sessionConfig()) return (local && local.expiresAt > Date.now()) ? local : undefined;
+    try {
+      const response = await sessionRequest(`?id=eq.${sessionId(token)}&select=data`);
+      const rows = await response.json();
+      if (rows[0]?.data) {
+        const fullSession: Session = { ...rows[0].data, token };
+        if (fullSession.expiresAt > Date.now()) {
+          localSessions.set(token, fullSession);
+          return fullSession;
+        }
+      }
+    } catch (e: any) {
+      console.warn('Could not read session from Supabase:', e?.message || e);
+      if (local && local.expiresAt > Date.now()) return local;
+    }
+    return undefined;
   },
   async delete(token: string) {
-    if (!sessionConfig()) { localSessions.delete(token); return; }
-    await sessionRequest(`?id=eq.${sessionId(token)}`, { method: 'DELETE' });
+    localSessions.delete(token);
+    if (!sessionConfig()) return;
+    try {
+      await sessionRequest(`?id=eq.${sessionId(token)}`, { method: 'DELETE' });
+    } catch (e: any) {
+      console.warn('Could not delete session from Supabase:', e?.message || e);
+    }
   },
   async entries(): Promise<[string, Session][]> {
     if (!sessionConfig()) return [...localSessions.entries()];
     const result: [string, Session][] = [];
-    for (let offset = 0; ; offset += 500) {
-      const response = await sessionRequest(`?id=like.${sessionPrefix}*&select=id,data&order=id&limit=500&offset=${offset}`);
-      const rows = await response.json();
-      for (const row of rows) result.push([row.id, row.data]);
-      if (rows.length < 500) return result;
+    try {
+      for (let offset = 0; ; offset += 500) {
+        const response = await sessionRequest(`?id=like.${sessionPrefix}*&select=id,data&order=id&limit=500&offset=${offset}`);
+        const rows = await response.json();
+        for (const row of rows) result.push([row.id, row.data]);
+        if (rows.length < 500) return result;
+      }
+    } catch (e: any) {
+      return [...localSessions.entries()];
     }
   },
   async deleteEntry(idOrToken: string) {
-    if (!sessionConfig()) { localSessions.delete(idOrToken); return; }
-    await sessionRequest(`?id=eq.${idOrToken}`, { method: 'DELETE' });
+    localSessions.delete(idOrToken);
+    if (!sessionConfig()) return;
+    try {
+      await sessionRequest(`?id=eq.${idOrToken}`, { method: 'DELETE' });
+    } catch (e: any) {}
   },
 };
 function asyncHandler(handler: (req: Request, res: Response, next: NextFunction) => Promise<any>) {
@@ -582,33 +615,49 @@ app.post('/api/auth/login', asyncHandler(async (req: Request, res: Response) => 
       res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu.' });
       return;
     }
-    // Match username: format [mã số]-[ddmmyyyy] (case-insensitive)
+
     const normalizedUsername = username.trim().toLowerCase();
-    const student = db.students.find(s => {
-      const cleanDob = (s.birthdate || '').replace(/\D/g, ''); // ddmmyyyy
+    const cleanUserDigits = normalizedUsername.replace(/\D/g, '');
+
+    // Helper to check password against student authHash or default birthdate
+    const checkPassword = (st: typeof db.students[0], pass: string): boolean => {
+      const cleanPassDigits = pass.replace(/\D/g, '');
+      const defaultPass = (st.birthdate || '').replace(/\D/g, '');
+      if (st.authHash && st.authSalt) {
+        if (verifyPassword(pass, st.authHash, st.authSalt)) return true;
+        if (cleanPassDigits.length > 0 && verifyPassword(cleanPassDigits, st.authHash, st.authSalt)) return true;
+      }
+      return pass === defaultPass || (cleanPassDigits.length > 0 && cleanPassDigits === defaultPass);
+    };
+
+    const matchingStudents = db.students.filter(s => {
+      const cleanDob = (s.birthdate || '').replace(/\D/g, '');
+      const cleanCode = (s.code || '').replace(/\D/g, '');
       const expectedUsername = `${s.code}-${cleanDob}`.toLowerCase();
-      return expectedUsername === normalizedUsername || (s as any).username?.toLowerCase() === normalizedUsername;
+      const slashUsername = `${s.code}-${s.birthdate}`.toLowerCase();
+
+      if (expectedUsername === normalizedUsername || slashUsername === normalizedUsername) return true;
+      if (s.code.trim().toLowerCase() === normalizedUsername) return true;
+      if (s.id.toLowerCase() === normalizedUsername) return true;
+      if ((s as any).username && (s as any).username.toLowerCase() === normalizedUsername) return true;
+      if (cleanUserDigits.length >= 6) {
+        if (cleanUserDigits === `${cleanCode}${cleanDob}`) return true;
+        if (cleanCode.length >= 6 && cleanUserDigits === cleanCode) return true;
+      }
+      return false;
     });
 
-    if (!student) {
+    if (matchingStudents.length === 0) {
       recordFailedLogin(ip);
-      res.status(401).json({ error: 'Tài khoản học sinh không tồn tại trong danh sách lớp.' });
+      res.status(401).json({ error: 'Tài khoản học sinh không tồn tại trong danh sách lớp. Vui lòng kiểm tra lại mã số hoặc ngày sinh.' });
       return;
     }
 
-    // Verify password
-    let valid = false;
-    if (student.authHash && student.authSalt) {
-      valid = verifyPassword(password, student.authHash, student.authSalt);
-    } else {
-      // Default password is birthdate in ddmmyyyy format
-      const defaultPass = (student.birthdate || '').replace(/\D/g, '');
-      valid = password === defaultPass;
-    }
-
-    if (!valid) {
+    // Pick student whose password matches
+    let student = matchingStudents.find(s => checkPassword(s, password));
+    if (!student) {
       recordFailedLogin(ip);
-      res.status(401).json({ error: 'Mật khẩu học sinh không đúng.' });
+      res.status(401).json({ error: 'Mật khẩu học sinh không đúng. Mật khẩu mặc định là ngày sinh 8 chữ số (ví dụ: 22122012).' });
       return;
     }
 
@@ -828,23 +877,23 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
     // Student can ONLY access their own data and published class items!
     const student = db.students.find(s => s.id === user.studentId);
     if (!student) {
-      res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh.' });
+      res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh trong hệ thống.' });
       return;
     }
 
-    // Filter attendance for this student only
-    const studentAttendance: Record<string, string> = {};
+    // Filter attendance for this student only: date -> { [student.id]: status }
+    const studentAttendance: Record<string, Record<string, string>> = {};
     for (const [date, rec] of Object.entries(db.attendance)) {
-      if (rec[student.id]) {
-        studentAttendance[date] = rec[student.id];
+      if (rec && rec[student.id]) {
+        studentAttendance[date] = { [student.id]: rec[student.id] };
       }
     }
 
-    // Filter grades for this student only
-    const studentGrades: Record<string, Record<string, number | null>> = {};
+    // Filter grades for this student only: month -> { [student.id]: { [subjectCode]: score } }
+    const studentGrades: Record<string, Record<string, Record<string, number | null>>> = {};
     for (const [month, monthRec] of Object.entries(db.grades)) {
-      if (monthRec[student.id]) {
-        studentGrades[month] = monthRec[student.id];
+      if (monthRec && monthRec[student.id]) {
+        studentGrades[month] = { [student.id]: monthRec[student.id] };
       }
     }
 
@@ -853,19 +902,23 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
       .filter(inc => inc.studentId === student.id && inc.visibleToStudent !== false)
       .map(inc => ({
         id: inc.id,
+        studentId: inc.studentId,
         date: inc.date,
         type: inc.type,
         ruleName: inc.ruleName,
         content: inc.content,
         points: inc.points,
+        notes: inc.notes,
+        visibleToStudent: true,
         recordedBy: inc.recordedBy,
+        createdAt: inc.createdAt,
       }));
 
     // Announcements: only published ones
     const publishedAnnouncements = db.announcements.filter(a => a.isPublished);
 
     // Seating chart: only if published
-    const seatingChart = db.seatingChart.isPublished ? db.seatingChart : null;
+    const seatingChart = (db.seatingChart && db.seatingChart.isPublished) ? db.seatingChart : null;
 
     // Honors: only published ones
     const publishedHonors = db.honors.filter(h => h.isPublished);
@@ -875,15 +928,23 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
     res.json({
       role: 'student',
       classSettings: {
+        id: db.classSettings.id,
         appName: db.classSettings.appName,
         schoolName: db.classSettings.schoolName,
         className: db.classSettings.className,
         homeroomTeacher: db.classSettings.homeroomTeacher,
         academicYear: db.classSettings.academicYear,
         logoUrl: db.classSettings.logoUrl,
+        initialSetupDone: db.classSettings.initialSetupDone,
+        attentionThresholdViolations: db.classSettings.attentionThresholdViolations,
+        attentionThresholdAbsences: db.classSettings.attentionThresholdAbsences,
+        syncEnabled: db.classSettings.syncEnabled,
+        updatedAt: db.classSettings.updatedAt,
       },
       student: safeStudent,
+      students: [safeStudent],
       emulationSettings: db.emulationSettings,
+      emulationRules: db.emulationRules.filter(r => r.active),
       subjects: db.subjects,
       attendance: studentAttendance,
       grades: studentGrades,
@@ -891,6 +952,10 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
       announcements: publishedAnnouncements,
       seatingChart,
       honors: publishedHonors,
+      supabaseStatus: {
+        enabled: db.supabaseConfig.enabled,
+        connected: db.supabaseConfig.enabled && !!db.supabaseConfig.url,
+      },
     });
     return;
   }

@@ -379,6 +379,10 @@ export const Students: React.FC = () => {
             const vCount = incidents.filter(
               i => i.studentId === student.id && (i.points < 0 || i.type === 'violation')
             ).length;
+            const deductedPoints = incidents
+              .filter(i => i.studentId === student.id && (i.points < 0 || i.type === 'violation'))
+              .reduce((acc, cur) => acc + Math.abs(cur.points), 0);
+
             let absCount = 0;
             Object.values(attendance).forEach(d => {
               if (d[student.id] === 'excused' || d[student.id] === 'unexcused' || d[student.id] === 'late') {
@@ -430,10 +434,21 @@ export const Students: React.FC = () => {
                   ID: {student.code}
                 </span>
 
-                {/* Today Attendance Status Pill */}
-                <div className="mt-3 w-full pt-2 border-t border-pink-50 flex items-center justify-center">
+                {/* Today Attendance Status Pill (CĐD) & Deducted Points */}
+                <div className="mt-3 w-full pt-2 border-t border-pink-50 flex items-center justify-between gap-1">
                   <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                    title={
+                      todayStatus === 'present'
+                        ? 'Có mặt'
+                        : todayStatus === 'excused'
+                        ? 'Vắng có phép'
+                        : todayStatus === 'unexcused'
+                        ? 'Vắng không phép'
+                        : todayStatus === 'late'
+                        ? 'Đi muộn'
+                        : 'Chưa điểm danh (CĐD)'
+                    }
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
                       todayStatus === 'present'
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : todayStatus === 'excused'
@@ -442,18 +457,30 @@ export const Students: React.FC = () => {
                         ? 'bg-rose-50 text-rose-700 border border-rose-200'
                         : todayStatus === 'late'
                         ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                        : 'bg-gray-100 text-gray-500'
+                        : 'bg-gray-100 text-gray-500 border border-gray-200'
                     }`}
                   >
                     {todayStatus === 'present'
                       ? 'Có mặt'
                       : todayStatus === 'excused'
-                      ? 'Vắng có phép'
+                      ? 'Vắng CP'
                       : todayStatus === 'unexcused'
-                      ? 'Vắng K.phép'
+                      ? 'Vắng KP'
                       : todayStatus === 'late'
                       ? 'Đi muộn'
-                      : 'Chưa điểm danh'}
+                      : 'CĐD'}
+                  </span>
+
+                  <span
+                    title={`Tổng điểm nề nếp bị trừ: ${deductedPoints}đ (${vCount} vi phạm)`}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-0.5 shrink-0 ${
+                      deductedPoints > 0
+                        ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                        : 'bg-slate-50 text-gray-400 border border-slate-200'
+                    }`}
+                  >
+                    <span className="text-[9px] text-gray-400 font-normal">Trừ:</span>
+                    <strong className="font-extrabold">{deductedPoints > 0 ? `-${deductedPoints}đ` : '0đ'}</strong>
                   </span>
                 </div>
 
@@ -534,29 +561,60 @@ export const Students: React.FC = () => {
                         )}
                       </td>
                       <td className="py-3 px-3 text-center">
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                            todayStatus === 'present'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span
+                            title={
+                              todayStatus === 'present'
+                                ? 'Có mặt'
+                                : todayStatus === 'excused'
+                                ? 'Vắng có phép'
+                                : todayStatus === 'unexcused'
+                                ? 'Vắng không phép'
+                                : todayStatus === 'late'
+                                ? 'Đi muộn'
+                                : 'Chưa điểm danh (CĐD)'
+                            }
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              todayStatus === 'present'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : todayStatus === 'excused'
+                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                : todayStatus === 'unexcused'
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : todayStatus === 'late'
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                : 'bg-gray-100 text-gray-500 border border-gray-200'
+                            }`}
+                          >
+                            {todayStatus === 'present'
+                              ? 'Có mặt'
                               : todayStatus === 'excused'
-                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                              ? 'Vắng CP'
                               : todayStatus === 'unexcused'
-                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              ? 'Vắng KP'
                               : todayStatus === 'late'
-                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                              : 'bg-gray-100 text-gray-400'
-                          }`}
-                        >
-                          {todayStatus === 'present'
-                            ? 'Có mặt'
-                            : todayStatus === 'excused'
-                            ? 'Vắng có phép'
-                            : todayStatus === 'unexcused'
-                            ? 'Vắng K.phép'
-                            : todayStatus === 'late'
-                            ? 'Đi muộn'
-                            : 'Chưa ĐD'}
-                        </span>
+                              ? 'Đi muộn'
+                              : 'CĐD'}
+                          </span>
+
+                          {(() => {
+                            const sDeducted = incidents
+                              .filter(i => i.studentId === s.id && (i.points < 0 || i.type === 'violation'))
+                              .reduce((acc, cur) => acc + Math.abs(cur.points), 0);
+                            return (
+                              <span
+                                title={`Điểm nề nếp bị trừ: ${sDeducted}đ`}
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                                  sDeducted > 0
+                                    ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                                    : 'bg-slate-50 text-gray-400 border border-slate-200'
+                                }`}
+                              >
+                                {sDeducted > 0 ? `-${sDeducted}đ` : '0đ'}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </td>
                       {role === 'teacher' && (
                         <td className="py-3 px-3 text-right">
