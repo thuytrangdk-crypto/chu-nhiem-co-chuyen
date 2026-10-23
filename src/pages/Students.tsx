@@ -70,6 +70,8 @@ export const Students: React.FC = () => {
   const [updateExisting, setUpdateExisting] = useState(true);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importLoading, setImportLoading] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deleteConfirmStudent, setDeleteConfirmStudent] = useState<Student | null>(null);
 
   // Filter students
   const filteredStudents = students.filter(s => {
@@ -157,20 +159,26 @@ export const Students: React.FC = () => {
     }
   };
 
-  const handleDeleteStudent = async (student: Student, e: React.MouseEvent) => {
+  const handleDeleteStudent = (student: Student, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (
-      !window.confirm(
-        `Xác nhận xóa học sinh "${student.fullName}" (Mã: ${student.code})?\nMọi dữ liệu điểm danh, điểm số và thi đua của học sinh này sẽ bị xóa khỏi lớp.`
-      )
-    ) {
-      return;
-    }
+    setDeleteConfirmStudent(student);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmStudent) return;
     try {
-      await api.deleteStudent(student.id);
+      await api.deleteStudent(deleteConfirmStudent.id);
       await refreshState();
+      setToast({
+        type: 'success',
+        message: `Đã xóa học sinh "${deleteConfirmStudent.fullName}" khỏi lớp.`,
+      });
+      setDeleteConfirmStudent(null);
     } catch (err: any) {
-      alert(err.message || 'Không thể xóa học sinh.');
+      setToast({
+        type: 'error',
+        message: err.message || 'Không thể xóa học sinh.',
+      });
     }
   };
 
@@ -184,46 +192,43 @@ export const Students: React.FC = () => {
       setPreviewStudents(parsed);
       setImportErrors([]);
     } catch (err: any) {
-      alert(err.message || 'Lỗi khi đọc file Excel.');
+      setToast({
+        type: 'error',
+        message: err.message || 'Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng file.',
+      });
     }
   };
 
   const handleExecuteImport = async () => {
     if (previewStudents.length === 0) return;
 
-    if (importMode === 'replace') {
-      const confirmMsg =
-        students.length > 0
-          ? `XÁC NHẬN THAY THẾ TOÀN BỘ DANH SÁCH LỚP?\n\n- Toàn bộ ${students.length} học sinh hiện tại sẽ được thay thế.\n- Lớp sẽ chỉ lưu danh sách đúng ${previewStudents.length} học sinh từ file Excel này.\n\nThầy/Cô có chắc chắn muốn thực hiện?`
-          : `Xác nhận nạp ${previewStudents.length} học sinh từ file Excel vào lớp?`;
-      if (!window.confirm(confirmMsg)) return;
-    }
-
     setImportLoading(true);
+    setImportErrors([]);
     try {
       const res = await api.batchImportStudents(previewStudents, {
         mode: importMode,
         updateExisting: true,
       });
       await refreshState();
-      if (importMode === 'replace') {
-        alert(
-          `Thay thế danh sách học sinh thành công!\n- Đã thiết lập lớp với: ${res.totalStudents} học sinh${
-            res.errors?.length ? `\n- Bỏ qua: ${res.errors.length} dòng lỗi` : ''
-          }`
-        );
-      } else {
-        alert(
-          `Bổ sung học sinh thành công!\n- Thêm mới: ${res.addedCount} học sinh\n- Cập nhật: ${res.updatedCount} học sinh\n- Tổng số học sinh: ${res.totalStudents} học sinh${
-            res.errors?.length ? `\n- Bỏ qua: ${res.errors.length} dòng lỗi` : ''
-          }`
-        );
-      }
+
+      const successMsg =
+        importMode === 'replace'
+          ? `Thay thế danh sách thành công! Đã cập nhật đúng ${res.totalStudents} học sinh vào lớp và lưu lên Supabase.`
+          : `Bổ sung học sinh thành công! Thêm mới: ${res.addedCount}, Cập nhật: ${res.updatedCount}. Tổng số học sinh: ${res.totalStudents}.`;
+
+      setToast({
+        type: 'success',
+        message: successMsg,
+      });
+
       setIsImportModalOpen(false);
       setPreviewStudents([]);
       setImportingFile(null);
     } catch (err: any) {
-      alert(err.message || 'Nhập danh sách học sinh thất bại.');
+      setToast({
+        type: 'error',
+        message: err.message || 'Nhập danh sách học sinh thất bại.',
+      });
     } finally {
       setImportLoading(false);
     }
@@ -231,6 +236,33 @@ export const Students: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Toast Alert Notification */}
+      {toast && (
+        <div
+          className={`p-4 rounded-2xl flex items-center justify-between gap-3 text-xs sm:text-sm font-medium animate-fadeIn ${
+            toast.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+              : 'bg-rose-50 text-rose-800 border border-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {toast.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+          </div>
+          <button
+            onClick={() => setToast(null)}
+            className="p-1 rounded-lg hover:bg-black/5 text-gray-500 hover:text-gray-700"
+            aria-label="Đóng thông báo"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Toolbar matching screenshot 4 */}
       <div className="bg-white rounded-3xl p-4 sm:p-5 border border-pink-100 shadow-xs flex flex-wrap items-center justify-between gap-3">
         {/* Search & Gender filter */}
@@ -1046,6 +1078,49 @@ export const Students: React.FC = () => {
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Delete Student Confirmation Modal */}
+      {deleteConfirmStudent && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-rose-100 space-y-4 animate-fadeIn">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-3 bg-rose-50 rounded-2xl">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900 text-base">Xác nhận xóa học sinh</h3>
+                <p className="text-xs text-gray-500">Thao tác này sẽ xóa hồ sơ khỏi danh sách lớp.</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-rose-50/50 rounded-2xl border border-rose-100 text-xs text-rose-900 space-y-1">
+              <div>
+                Học sinh: <strong className="font-bold">{deleteConfirmStudent.fullName}</strong>
+              </div>
+              <div>Mã học sinh: {deleteConfirmStudent.code}</div>
+              <div className="text-[11px] text-rose-700 font-medium pt-1">
+                Toàn bộ dữ liệu điểm danh, điểm số và thi đua của học sinh này sẽ bị xóa khỏi lớp.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmStudent(null)}
+                className="px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors"
+              >
+                Xác nhận xóa
+              </button>
             </div>
           </div>
         </div>

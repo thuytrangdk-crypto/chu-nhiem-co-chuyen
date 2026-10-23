@@ -46,6 +46,9 @@ interface AppContextType {
   honors: HonorItem[];
   supabaseStatus: SupabaseStatus;
   currentStudent: Student | null; // For student role or selected student
+  emergencyBackup: { count: number; date: string } | null;
+  restoreEmergencyBackup: () => Promise<boolean>;
+  dismissEmergencyBackup: () => void;
 }
 
 const defaultSettings: ClassSettings = {
@@ -79,6 +82,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [state, setState] = useState<AppState | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [emergencyBackup, setEmergencyBackup] = useState<{ count: number; date: string; data: any[] } | null>(null);
 
   const refreshState = useCallback(async () => {
     if (!token) return;
@@ -87,13 +91,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const data: AppState = await api.getState();
       setState(data);
+
+      // Auto-cache to browser localStorage for teacher
+      if (role === 'teacher' && data.students && data.students.length > 3) {
+        try {
+          const cachePayload = {
+            count: data.students.length,
+            date: new Date().toLocaleString('vi-VN'),
+            timestamp: Date.now(),
+            students: data.students,
+          };
+          localStorage.setItem('gvcn_browser_backup_data', JSON.stringify(cachePayload));
+        } catch (e) {
+          console.warn('Could not save local browser cache:', e);
+        }
+      } else if (role === 'teacher' && data.students && data.students.length <= 3) {
+        // If current server students are only default samples (<=3), check if browser has a larger cached roster
+        try {
+          const cachedRaw = localStorage.getItem('gvcn_browser_backup_data');
+          if (cachedRaw) {
+            const parsed = JSON.parse(cachedRaw);
+            if (parsed && Array.isArray(parsed.students) && parsed.students.length > 3) {
+              setEmergencyBackup({
+                count: parsed.students.length,
+                date: parsed.date || 'Gần đây',
+                data: parsed.students,
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('Could not read local browser cache:', e);
+        }
+      }
     } catch (err: any) {
       console.error('Failed to load state:', err);
       setError(err.message || 'Không thể tải dữ liệu.');
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [token, role]);
+
+  const restoreEmergencyBackup = async (): Promise<boolean> => {
+    if (!emergencyBackup || !emergencyBackup.data || emergencyBackup.data.length === 0) return false;
+    try {
+      setIsLoading(true);
+      await api.batchImportStudents(emergencyBackup.data, { mode: 'replace', updateExisting: true });
+      await refreshState();
+      setEmergencyBackup(null);
+      return true;
+    } catch (err: any) {
+      setError(`Lỗi khôi phục bản sao lưu: ${err.message}`);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const dismissEmergencyBackup = () => {
+    setEmergencyBackup(null);
+  };
 
   useEffect(() => {
     if (token) {
@@ -152,6 +208,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         honors,
         supabaseStatus,
         currentStudent,
+        emergencyBackup: emergencyBackup ? { count: emergencyBackup.count, date: emergencyBackup.date } : null,
+        restoreEmergencyBackup,
+        dismissEmergencyBackup,
       }}
     >
       {children}

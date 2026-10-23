@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Menu, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
+import { api } from '../services/api';
+import { Menu, Sparkles, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface Props {
   onToggleMobileMenu: () => void;
@@ -10,6 +11,31 @@ interface Props {
 export const Header: React.FC<Props> = ({ onToggleMobileMenu }) => {
   const { role } = useAuth();
   const { classSettings, supabaseStatus, refreshState, isLoading, error } = useApp();
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    setSyncFeedback(null);
+    try {
+      if (role === 'teacher') {
+        const res = await api.syncCloud();
+        await refreshState();
+        setSyncFeedback(res.message || 'Đồng bộ Supabase thành công!');
+      } else {
+        await refreshState();
+        setSyncFeedback('Đã tải lại dữ liệu mới nhất!');
+      }
+    } catch (err: any) {
+      console.warn('Sync notice:', err.message);
+      // Fallback to regular state refresh
+      await refreshState().catch(() => {});
+      setSyncFeedback(err.message || 'Đã làm mới dữ liệu');
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncFeedback(null), 4000);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-pink-100 px-4 py-2.5 flex items-center justify-between shadow-2xs">
@@ -39,15 +65,25 @@ export const Header: React.FC<Props> = ({ onToggleMobileMenu }) => {
           <span>Năm học {classSettings.academicYear}</span>
         </div>
 
+        {/* Sync Success Feedback Toast */}
+        {syncFeedback && (
+          <div className="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 animate-fadeIn">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="truncate max-w-[200px]">{syncFeedback}</span>
+          </div>
+        )}
+
         {/* Sync / Refresh Button */}
         <button
-          onClick={() => refreshState()}
-          disabled={isLoading}
-          title="Tải lại dữ liệu mới nhất"
+          onClick={handleSync}
+          disabled={isLoading || isSyncing}
+          title="Đồng bộ dữ liệu với máy chủ & đám mây Supabase"
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-pink-200 text-xs font-medium text-pink-700 hover:bg-pink-50 transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          <span className="hidden md:inline">Đồng bộ</span>
+          <RefreshCw className={`w-3.5 h-3.5 ${isLoading || isSyncing ? 'animate-spin' : ''}`} />
+          <span className="hidden md:inline">
+            {isSyncing ? 'Đang đồng bộ...' : 'Đồng bộ'}
+          </span>
         </button>
 
         {error && (

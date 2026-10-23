@@ -13,14 +13,7 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Path normalization middleware for Vercel serverless functions
-// Ensures requests with or without /api prefix reach the right Express routes
-app.use((req: Request, res: Response, next: NextFunction) => {
-  if (req.url && !req.url.startsWith('/api') && !req.url.startsWith('/@') && !req.url.startsWith('/src') && !req.url.startsWith('/assets') && !req.url.startsWith('/favicon') && !req.url.startsWith('/public')) {
-    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
-  }
-  next();
-});
+
 
 // Ensure data directory exists (use /tmp on Vercel serverless)
 const DATA_DIR = process.env.VERCEL ? path.join('/tmp', 'data') : path.resolve(process.cwd(), 'data');
@@ -223,7 +216,125 @@ const initialDb = {
   }>,
 };
 
-// Read / Write DB
+// --- Cloud & Local Database Persistence Layer ---
+const SUPABASE_APP_DATA_ID = 'gvcn_class_state_primary';
+
+function saveDatabaseLocally(data: typeof initialDb) {
+  try {
+    const tempFile = `${DB_FILE}.tmp`;
+    // CRITICAL: Scrub secret keys completely from data before saving to db.json
+    const scrubbedData = {
+      ...data,
+      supabaseConfig: {
+        url: data.supabaseConfig.url || process.env.SUPABASE_URL || '',
+        serviceKey: '', // NEVER write secret key to data/db.json
+        enabled: !!((data.supabaseConfig.url || process.env.SUPABASE_URL) && (data.supabaseConfig.serviceKey || process.env.SUPABASE_SERVICE_ROLE_KEY)),
+        lastSyncedAt: data.supabaseConfig.lastSyncedAt,
+        syncStatus: data.supabaseConfig.syncStatus,
+      },
+    };
+    fs.writeFileSync(tempFile, JSON.stringify(scrubbedData, null, 2), 'utf-8');
+    fs.renameSync(tempFile, DB_FILE);
+  } catch (err) {
+    console.error('Error writing local database file:', err);
+  }
+}
+
+// Push state to Supabase cloud
+async function syncToSupabase(data: typeof initialDb): Promise<boolean> {
+  const sUrl = (data.supabaseConfig.url || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const sKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || data.supabaseConfig.serviceKey || '').trim();
+  if (!sUrl || !sKey) return false;
+
+  try {
+    const cleanUrl = sUrl.replace(/\/rest\/v1\/?$/, '');
+    const payload = {
+      id: SUPABASE_APP_DATA_ID,
+      data: {
+        version: data.version,
+        classSettings: data.classSettings,
+        adminAuth: data.adminAuth,
+        emulationRules: data.emulationRules,
+        emulationSettings: data.emulationSettings,
+        subjects: data.subjects,
+        students: data.students,
+        attendance: data.attendance,
+        grades: data.grades,
+        incidents: data.incidents,
+        announcements: data.announcements,
+        seatingChart: data.seatingChart,
+        honors: data.honors,
+        gradeSnapshots: data.gradeSnapshots,
+      },
+      updated_at: new Date().toISOString(),
+    };
+
+    const res = await fetch(`${cleanUrl}/rest/v1/app_data`, {
+      method: 'POST',
+      headers: {
+        apikey: sKey,
+        Authorization: `Bearer ${sKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok || res.status === 201 || res.status === 200) {
+      data.supabaseConfig.lastSyncedAt = new Date().toISOString();
+      data.supabaseConfig.syncStatus = 'connected';
+      console.log(`☁️ [Supabase Cloud] State synced successfully (${data.students.length} students)`);
+      return true;
+    } else {
+      const errText = await res.text();
+      console.warn('⚠️ [Supabase Cloud] Upsert status:', res.status, errText);
+      return false;
+    }
+  } catch (err: any) {
+    console.error('❌ [Supabase Cloud] Sync failed:', err.message);
+    return false;
+  }
+}
+
+// Pull state from Supabase cloud
+async function loadFromSupabase(): Promise<typeof initialDb | null> {
+  const sUrl = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const sKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!sUrl || !sKey) return null;
+
+  try {
+    const cleanUrl = sUrl.replace(/\/rest\/v1\/?$/, '');
+    const res = await fetch(`${cleanUrl}/rest/v1/app_data?id=eq.${SUPABASE_APP_DATA_ID}`, {
+      headers: {
+        apikey: sKey,
+        Authorization: `Bearer ${sKey}`,
+      },
+    });
+
+    if (res.ok) {
+      const rows = await res.json();
+      if (Array.isArray(rows) && rows.length > 0 && rows[0].data) {
+        const cloudData = rows[0].data;
+        console.log(`☁️ [Supabase Cloud] Retrieved cloud state (${cloudData.students?.length || 0} students)`);
+        return {
+          ...initialDb,
+          ...cloudData,
+          supabaseConfig: {
+            url: sUrl,
+            serviceKey: sKey,
+            enabled: true,
+            lastSyncedAt: rows[0].updated_at || new Date().toISOString(),
+            syncStatus: 'connected',
+          },
+        };
+      }
+    }
+  } catch (err: any) {
+    console.error('❌ [Supabase Cloud] Load failed:', err.message);
+  }
+  return null;
+}
+
 function loadDatabase(): typeof initialDb {
   try {
     if (fs.existsSync(DB_FILE)) {
@@ -248,32 +359,63 @@ function loadDatabase(): typeof initialDb {
   } catch (err) {
     console.error('Error loading database:', err);
   }
-  saveDatabase(initialDb);
+  saveDatabaseLocally(initialDb);
   return initialDb;
 }
 
 function saveDatabase(data: typeof initialDb) {
-  try {
-    const tempFile = `${DB_FILE}.tmp`;
-    // CRITICAL: Scrub secret keys completely from data before saving to db.json
-    const scrubbedData = {
-      ...data,
-      supabaseConfig: {
-        url: data.supabaseConfig.url || process.env.SUPABASE_URL || '',
-        serviceKey: '', // NEVER write secret key to data/db.json
-        enabled: !!((data.supabaseConfig.url || process.env.SUPABASE_URL) && (data.supabaseConfig.serviceKey || process.env.SUPABASE_SERVICE_ROLE_KEY)),
-        lastSyncedAt: data.supabaseConfig.lastSyncedAt,
-        syncStatus: data.supabaseConfig.syncStatus,
-      },
-    };
-    fs.writeFileSync(tempFile, JSON.stringify(scrubbedData, null, 2), 'utf-8');
-    fs.renameSync(tempFile, DB_FILE);
-  } catch (err) {
-    console.error('Error writing database:', err);
-  }
+  saveDatabaseLocally(data);
+  // Async push to Supabase cloud
+  syncToSupabase(data).catch(err => {
+    console.error('Background Supabase sync error:', err);
+  });
 }
 
 let db = loadDatabase();
+let isCloudInitialized = false;
+let cloudInitPromise: Promise<void> | null = null;
+
+async function ensureCloudHydrated(): Promise<void> {
+  if (isCloudInitialized) return;
+  if (!cloudInitPromise) {
+    cloudInitPromise = (async () => {
+      try {
+        const cloudState = await loadFromSupabase();
+        if (cloudState && cloudState.students) {
+          console.log(`☁️ Hydrating db with Supabase cloud data: ${cloudState.students.length} students, isInitialPassword: ${cloudState.adminAuth?.isInitialPassword}`);
+          db = {
+            ...db,
+            ...cloudState,
+            supabaseConfig: {
+              ...db.supabaseConfig,
+              ...cloudState.supabaseConfig,
+              url: process.env.SUPABASE_URL || cloudState.supabaseConfig.url || db.supabaseConfig.url,
+              serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+              enabled: true,
+              syncStatus: 'connected',
+            },
+          };
+          saveDatabaseLocally(db);
+        } else if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          await syncToSupabase(db);
+        }
+      } catch (err: any) {
+        console.error('ensureCloudHydrated error:', err.message);
+      } finally {
+        isCloudInitialized = true;
+      }
+    })();
+  }
+  await cloudInitPromise;
+}
+
+// Ensure cloud state is loaded before any API request executes
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  if (!isCloudInitialized && (req.path.startsWith('/api') || req.path === '/')) {
+    await ensureCloudHydrated();
+  }
+  next();
+});
 
 // --- Auth Middleware ---
 function authMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -1327,6 +1469,59 @@ app.post('/api/system/save-supabase-config', authMiddleware, teacherOnly, (req: 
   });
 });
 
+// Explicit Cloud Sync (Push to Supabase)
+app.post('/api/system/sync', authMiddleware, teacherOnly, async (req: Request, res: Response) => {
+  try {
+    const success = await syncToSupabase(db);
+    if (success) {
+      db.supabaseConfig.lastSyncedAt = new Date().toISOString();
+      db.supabaseConfig.syncStatus = 'connected';
+      saveDatabaseLocally(db);
+      res.json({
+        success: true,
+        message: `Đã đồng bộ thành công dữ liệu lớp lên Supabase (${db.students.length} học sinh, ${db.announcements.length} thông báo).`,
+        totalStudents: db.students.length,
+        lastSyncedAt: db.supabaseConfig.lastSyncedAt,
+      });
+    } else {
+      res.status(500).json({
+        error: 'Không thể kết nối đến Supabase để đồng bộ. Vui lòng kiểm tra lại URL và Service Role Key.',
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: `Lỗi đồng bộ: ${err.message}` });
+  }
+});
+
+// Explicit Cloud Pull (Pull from Supabase)
+app.post('/api/system/pull-supabase', authMiddleware, teacherOnly, async (req: Request, res: Response) => {
+  try {
+    const cloudState = await loadFromSupabase();
+    if (!cloudState) {
+      res.status(404).json({ error: 'Chưa tìm thấy dữ liệu sao lưu lớp học trên Supabase đám mây.' });
+      return;
+    }
+    db = {
+      ...initialDb,
+      ...cloudState,
+      supabaseConfig: {
+        ...db.supabaseConfig,
+        lastSyncedAt: new Date().toISOString(),
+        syncStatus: 'connected',
+      },
+    };
+    saveDatabaseLocally(db);
+    res.json({
+      success: true,
+      message: `Đã nạp thành công ${db.students.length} học sinh từ Supabase đám mây!`,
+      totalStudents: db.students.length,
+      lastSyncedAt: db.supabaseConfig.lastSyncedAt,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Lỗi tải dữ liệu Supabase: ${err.message}` });
+  }
+});
+
 // Export Backup JSON
 app.get('/api/system/backup', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const backupData = JSON.parse(JSON.stringify(db));
@@ -1540,6 +1735,11 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Ensure latest cloud data from Supabase is loaded on startup
+  ensureCloudHydrated().catch(err => {
+    console.warn('Initial cloud hydration check:', err.message);
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 [Trợ Lý Chủ Nhiệm] Server running on http://0.0.0.0:${PORT}`);

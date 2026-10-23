@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Copy,
   Info,
+  RefreshCw,
 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
@@ -174,6 +175,51 @@ export const Settings: React.FC = () => {
       });
     } catch (err: any) {
       alert(err.message || 'Lỗi lưu Supabase.');
+    }
+  };
+
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+
+  const handleSyncCloud = async () => {
+    setIsCloudSyncing(true);
+    setSupabaseTestMsg(null);
+    try {
+      const res = await api.syncCloud();
+      await refreshState();
+      setSupabaseTestMsg({
+        type: 'ok',
+        text: res.message || 'Đồng bộ toàn bộ lớp học lên đám mây Supabase thành công!',
+      });
+    } catch (err: any) {
+      setSupabaseTestMsg({
+        type: 'err',
+        text: err.message || 'Không thể đồng bộ lên Supabase.',
+      });
+    } finally {
+      setIsCloudSyncing(false);
+    }
+  };
+
+  const handlePullCloud = async () => {
+    if (!window.confirm('Bạn có chắc chắn muốn tải lại toàn bộ dữ liệu từ Supabase đám mây về máy chủ?')) {
+      return;
+    }
+    setIsCloudSyncing(true);
+    setSupabaseTestMsg(null);
+    try {
+      const res = await api.pullCloud();
+      await refreshState();
+      setSupabaseTestMsg({
+        type: 'ok',
+        text: res.message || 'Tải dữ liệu từ đám mây Supabase thành công!',
+      });
+    } catch (err: any) {
+      setSupabaseTestMsg({
+        type: 'err',
+        text: err.message || 'Không thể tải dữ liệu từ Supabase.',
+      });
+    } finally {
+      setIsCloudSyncing(false);
     }
   };
 
@@ -707,6 +753,32 @@ export const Settings: React.FC = () => {
                       >
                         Lưu cấu hình Supabase
                       </button>
+
+                      {supabaseStatus.connected && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={isCloudSyncing}
+                            onClick={handleSyncCloud}
+                            title="Lưu trữ vĩnh viễn danh sách lớp hiện tại lên Supabase"
+                            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isCloudSyncing ? 'animate-spin' : ''}`} />
+                            <span>{isCloudSyncing ? 'Đang đồng bộ...' : 'Đồng bộ lên Supabase'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isCloudSyncing}
+                            onClick={handlePullCloud}
+                            title="Tải lại toàn bộ dữ liệu từ đám mây Supabase về máy"
+                            className="px-4 py-2 rounded-xl border border-emerald-300 text-emerald-800 bg-emerald-50 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                          >
+                            <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Tải từ Supabase</span>
+                          </button>
+                        </>
+                      )}
                     </div>
 
                     {supabaseTestMsg && (

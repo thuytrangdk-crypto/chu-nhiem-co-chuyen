@@ -269,6 +269,18 @@ class ApiService {
     });
   }
 
+  async syncCloud(): Promise<{ success: boolean; message: string; lastSyncedAt: string; totalStudents: number }> {
+    return this.request('/system/sync', {
+      method: 'POST',
+    });
+  }
+
+  async pullCloud(): Promise<{ success: boolean; message: string; lastSyncedAt: string; totalStudents: number }> {
+    return this.request('/system/pull-supabase', {
+      method: 'POST',
+    });
+  }
+
   async restoreBackup(backupData: any) {
     return this.request('/system/restore', {
       method: 'POST',

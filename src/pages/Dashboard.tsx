@@ -26,6 +26,9 @@ export const Dashboard: React.FC = () => {
     openStudentProfile,
     setActiveTab,
     refreshState,
+    emergencyBackup,
+    restoreEmergencyBackup,
+    dismissEmergencyBackup,
   } = useApp();
 
   const totalStudents = students.length;
@@ -91,6 +94,39 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Emergency Local Browser Backup Banner */}
+      {emergencyBackup && role === 'teacher' && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm animate-fadeIn">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 rounded-2xl bg-amber-200/80 text-amber-800 shrink-0">
+              <Sparkles className="w-5 h-5 text-amber-700" />
+            </div>
+            <div>
+              <h4 className="font-bold text-amber-950 text-sm">
+                Tìm thấy bản sao lưu trên trình duyệt ({emergencyBackup.count} học sinh)
+              </h4>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Hệ thống phát hiện dữ liệu học sinh đã lưu trước đó trên trình duyệt này ({emergencyBackup.date}). Bạn có muốn nạp lại danh sách học sinh này và đồng bộ lên Supabase không?
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={restoreEmergencyBackup}
+              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-colors"
+            >
+              Khôi phục ngay
+            </button>
+            <button
+              onClick={dismissEmergencyBackup}
+              className="px-3 py-2 rounded-xl border border-amber-300 text-amber-800 hover:bg-amber-100 font-medium text-xs transition-colors"
+            >
+              Bỏ qua
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Banner matching soft pastel pink from reference */}
       <div className="bg-gradient-to-r from-[#feb5c0] via-[#fda8b7] to-[#fca5b5] rounded-3xl p-6 sm:p-7 text-[#5a1020] border border-[#f89fae]/50 shadow-xs relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-8 -translate-y-8 w-48 h-48 bg-white/30 rounded-full blur-2xl pointer-events-none"></div>
