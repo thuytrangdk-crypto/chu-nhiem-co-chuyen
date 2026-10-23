@@ -13,6 +13,8 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+
+
 // Ensure data directory exists (use /tmp on Vercel serverless)
 const DATA_DIR = process.env.VERCEL ? path.join('/tmp', 'data') : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
@@ -36,7 +38,7 @@ function verifyPassword(password: string, hash: string, salt: string): boolean {
   return check === hash;
 }
 
-// In-memory sessions store
+// Sessions must survive cold starts and be shared by all Vercel instances.
 interface Session {
   token: string;
   role: 'teacher' | 'student';
@@ -45,7 +47,77 @@ interface Session {
   createdAt: number;
   expiresAt: number;
 }
-const sessions: Map<string, Session> = new Map();
+const sessionPrefix = 'gvcn_session_';
+const localSessions = new Map<string, Session>();
+function sessionConfig() {
+  const url = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!url || !key) {
+    if (process.env.VERCEL) throw new Error('Cần cấu hình SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.');
+    return null;
+  }
+  return { url, key };
+}
+function sessionId(token: string) {
+  return sessionPrefix + crypto.createHash('sha256').update(token).digest('hex');
+}
+async function sessionRequest(query: string, options: RequestInit = {}) {
+  const config = sessionConfig();
+  if (!config) throw new Error('Chưa cấu hình kho phiên đăng nhập.');
+  const response = await fetch(`${config.url}/rest/v1/app_data${query}`, {
+    ...options,
+    signal: AbortSignal.timeout(10000),
+    headers: {
+      apikey: config.key, Authorization: `Bearer ${config.key}`,
+      'Content-Type': 'application/json', ...options.headers,
+    },
+  });
+  if (!response.ok) throw new Error(`Không thể truy cập phiên đăng nhập trên Supabase (HTTP ${response.status}).`);
+  return response;
+}
+const sessions = {
+  async set(token: string, session: Session) {
+    if (!sessionConfig()) { localSessions.set(token, session); return; }
+    // Store only the digest of the bearer token in Supabase.
+    const { token: _token, ...data } = session;
+    await sessionRequest('', {
+      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ id: sessionId(token), data, updated_at: new Date().toISOString() }),
+    });
+  },
+  async get(token: string): Promise<Session | undefined> {
+    if (!sessionConfig()) return localSessions.get(token);
+    const response = await sessionRequest(`?id=eq.${sessionId(token)}&select=data`);
+    const rows = await response.json();
+    return rows[0]?.data ? { ...rows[0].data, token } : undefined;
+  },
+  async delete(token: string) {
+    if (!sessionConfig()) { localSessions.delete(token); return; }
+    await sessionRequest(`?id=eq.${sessionId(token)}`, { method: 'DELETE' });
+  },
+  async entries(): Promise<[string, Session][]> {
+    if (!sessionConfig()) return [...localSessions.entries()];
+    const result: [string, Session][] = [];
+    for (let offset = 0; ; offset += 500) {
+      const response = await sessionRequest(`?id=like.${sessionPrefix}*&select=id,data&order=id&limit=500&offset=${offset}`);
+      const rows = await response.json();
+      for (const row of rows) result.push([row.id, row.data]);
+      if (rows.length < 500) return result;
+    }
+  },
+  async deleteEntry(idOrToken: string) {
+    if (!sessionConfig()) { localSessions.delete(idOrToken); return; }
+    await sessionRequest(`?id=eq.${idOrToken}`, { method: 'DELETE' });
+  },
+};
+function asyncHandler(handler: (req: Request, res: Response, next: NextFunction) => Promise<any>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(handler(req, res, next)).catch((error) => {
+      console.error('Session request failed:', error.message);
+      if (!res.headersSent) res.status(503).json({ error: 'Không thể xác minh phiên đăng nhập. Vui lòng kiểm tra cấu hình Supabase trên máy chủ và thử lại.' });
+    });
+  };
+}
 
 // Rate limiting for login attempts
 const loginAttempts: Map<string, { count: number; lockedUntil: number }> = new Map();
@@ -135,62 +207,62 @@ const initialDb = {
     { id: 'sub_gdcd', code: 'GDCD', name: 'GDCD', isGraded: true },
     { id: 'sub_tin', code: 'TIN', name: 'Tin học', isGraded: true },
     { id: 'sub_cn', code: 'CN', name: 'Công nghệ', isGraded: true },
-    { id: 'sub_td', code: 'TD', name: 'Thể dục', isGraded: false },
+    { id: 'sub_td', code: 'TD', name: 'Thể dục', isGraded: false }, // Đánh giá Đạt/Chưa đạt
     { id: 'sub_amnhac', code: 'AN', name: 'Âm nhạc', isGraded: false },
     { id: 'sub_mythuat', code: 'MT', name: 'Mĩ thuật', isGraded: false },
     { id: 'sub_hdtn', code: 'HDTN', name: 'HĐTN-HN', isGraded: false },
   ],
   students: [
     {
-      id: 'stu_1792638158145_14ej0a',
-      code: '02102013',
-      fullName: 'Huỳnh Ngọc Trâm Anh',
-      gender: 'Nữ',
-      birthdate: '02/10/2013',
-      parentName: 'Huỳnh Văn A',
-      parentPhone: '0901234567',
-      address: 'TP. Hồ Chí Minh',
-      notes: 'Lớp phó học tập',
-      internalNotes: '',
-      authHash: '51e5a4d5071eed20e9434f16a4d3fc84ebafd7314c41d204de4bb43fb690b26805d3b45ced8aaa17a1d8f0469ce0d042f72e2b839a48c30f7637326e0e158193',
-      authSalt: '710b1c5f91e274f78d7d5cb3a7e2055c',
+      id: "stu_1792638158145_14ej0a",
+      code: "02102013",
+      fullName: "Huỳnh Ngọc Trâm Anh",
+      gender: "Nữ",
+      birthdate: "02/10/2013",
+      parentName: "Huỳnh Văn A",
+      parentPhone: "0901234567",
+      address: "TP. Hồ Chí Minh",
+      notes: "Lớp phó học tập",
+      internalNotes: "",
+      authHash: "51e5a4d5071eed20e9434f16a4d3fc84ebafd7314c41d204de4bb43fb690b26805d3b45ced8aaa17a1d8f0469ce0d042f72e2b839a48c30f7637326e0e158193",
+      authSalt: "710b1c5f91e274f78d7d5cb3a7e2055c",
       mustChangePassword: false,
-      createdAt: '2026-10-22T03:02:38.145Z',
-      updatedAt: '2026-10-22T03:02:38.145Z',
+      createdAt: "2026-10-22T03:02:38.145Z",
+      updatedAt: "2026-10-22T03:02:38.145Z",
     },
     {
-      id: 'stu_1792638158157_z2ncek',
-      code: '27122013',
-      fullName: 'Trần Ngô Quỳnh Anh',
-      gender: 'Nữ',
-      birthdate: '27/12/2013',
-      parentName: 'Trần Văn B',
-      parentPhone: '0912345678',
-      address: 'TP. Hồ Chí Minh',
-      notes: '',
-      internalNotes: '',
-      authHash: 'ea756fc216823407b918b070ffd0f48669fc35c2478d21417550a6cb4b664446b08b4d978d8e6266f91af0861c87d6e4b0476dc820287fb43dfaf78d2bf4c575',
-      authSalt: 'a1afabf52295b435381ab640a5a15199',
+      id: "stu_1792638158157_z2ncek",
+      code: "27122013",
+      fullName: "Trần Ngô Quỳnh Anh",
+      gender: "Nữ",
+      birthdate: "27/12/2013",
+      parentName: "Trần Văn B",
+      parentPhone: "0912345678",
+      address: "TP. Hồ Chí Minh",
+      notes: "",
+      internalNotes: "",
+      authHash: "ea756fc216823407b918b070ffd0f48669fc35c2478d21417550a6cb4b664446b08b4d978d8e6266f91af0861c87d6e4b0476dc820287fb43dfaf78d2bf4c575",
+      authSalt: "a1afabf52295b435381ab640a5a15199",
       mustChangePassword: false,
-      createdAt: '2026-10-22T03:02:38.157Z',
-      updatedAt: '2026-10-22T03:02:38.157Z',
+      createdAt: "2026-10-22T03:02:38.157Z",
+      updatedAt: "2026-10-22T03:02:38.157Z",
     },
     {
-      id: 'stu_1792638158168_5xyrq5',
-      code: '26052013',
-      fullName: 'Nguyễn Gia Bảo',
-      gender: 'Nam',
-      birthdate: '26/05/2013',
-      parentName: 'Nguyễn Văn C',
-      parentPhone: '0923456789',
-      address: 'TP. Hồ Chí Minh',
-      notes: '',
-      internalNotes: '',
-      authHash: '43d7be760869aca3cce6bd421764b31588fd15b0f27df26675cedcb19454063bbd0b0c0ab2a5526ee134b10e78e906c2020072363b789c78ad3dbe931996a7ed',
-      authSalt: 'a8d32cdef1423ce720c9560f48b598fb',
+      id: "stu_1792638158168_5xyrq5",
+      code: "26052013",
+      fullName: "Nguyễn Gia Bảo",
+      gender: "Nam",
+      birthdate: "26/05/2013",
+      parentName: "Nguyễn Văn C",
+      parentPhone: "0923456789",
+      address: "TP. Hồ Chí Minh",
+      notes: "",
+      internalNotes: "",
+      authHash: "43d7be760869aca3cce6bd421764b31588fd15b0f27df26675cedcb19454063bbd0b0c0ab2a5526ee134b10e78e906c2020072363b789c78ad3dbe931996a7ed",
+      authSalt: "a8d32cdef1423ce720c9560f48b598fb",
       mustChangePassword: false,
-      createdAt: '2026-10-22T03:02:38.168Z',
-      updatedAt: '2026-10-22T03:02:38.168Z',
+      createdAt: "2026-10-22T03:02:38.168Z",
+      updatedAt: "2026-10-22T03:02:38.168Z",
     },
   ],
   attendance: {} as Record<string, Record<string, string>>, // date: { studentId: status }
@@ -378,6 +450,7 @@ async function ensureCloudHydrated(): Promise<void> {
   if (!cloudInitPromise) {
     cloudInitPromise = (async () => {
       try {
+        if (process.env.VERCEL) sessionConfig();
         const cloudState = await loadFromSupabase();
         if (cloudState && cloudState.students) {
           console.log(`☁️ Hydrating db with Supabase cloud data: ${cloudState.students.length} students, isInitialPassword: ${cloudState.adminAuth?.isInitialPassword}`);
@@ -395,11 +468,13 @@ async function ensureCloudHydrated(): Promise<void> {
           };
           saveDatabaseLocally(db);
         } else if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          if (process.env.VERCEL) throw new Error("Không đọc được dữ liệu lớp từ Supabase; dừng khởi tạo để bảo vệ dữ liệu.");
           await syncToSupabase(db);
         }
+        isCloudInitialized = true;
       } catch (err: any) {
         console.error('ensureCloudHydrated error:', err.message);
-      } finally {
+        if (process.env.VERCEL) throw err;
         isCloudInitialized = true;
       }
     })();
@@ -408,34 +483,34 @@ async function ensureCloudHydrated(): Promise<void> {
 }
 
 // Ensure cloud state is loaded before any API request executes
-app.use(async (req: Request, res: Response, next: NextFunction) => {
+app.use(asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   if (!isCloudInitialized && (req.path.startsWith('/api') || req.path === '/')) {
     await ensureCloudHydrated();
   }
   next();
-});
+}));
 
 // --- Auth Middleware ---
-function authMiddleware(req: Request, res: Response, next: NextFunction) {
+const authMiddleware = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Chưa đăng nhập. Vui lòng đăng nhập lại.' });
     return;
   }
   const token = authHeader.substring(7);
-  const session = sessions.get(token);
+  const session = await sessions.get(token);
   if (!session) {
     res.status(401).json({ error: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ.' });
     return;
   }
   if (session.expiresAt < Date.now()) {
-    sessions.delete(token);
+    await sessions.delete(token);
     res.status(401).json({ error: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
     return;
   }
   (req as any).user = session;
   next();
-}
+});
 
 function teacherOnly(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).user as Session;
@@ -460,7 +535,7 @@ app.get('/api/health', (req: Request, res: Response) => {
 });
 
 // Auth Login
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', asyncHandler(async (req: Request, res: Response) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   if (!checkLoginRateLimit(ip)) {
     res.status(429).json({ error: 'Quá nhiều lần thử đăng nhập sai. Vui lòng thử lại sau 15 phút.' });
@@ -489,7 +564,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       createdAt: Date.now(),
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
     };
-    sessions.set(token, session);
+    await sessions.set(token, session);
     res.json({
       token,
       role: 'teacher',
@@ -507,9 +582,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu.' });
       return;
     }
+    // Match username: format [mã số]-[ddmmyyyy] (case-insensitive)
     const normalizedUsername = username.trim().toLowerCase();
     const student = db.students.find(s => {
-      const cleanDob = (s.birthdate || '').replace(/\D/g, '');
+      const cleanDob = (s.birthdate || '').replace(/\D/g, ''); // ddmmyyyy
       const expectedUsername = `${s.code}-${cleanDob}`.toLowerCase();
       return expectedUsername === normalizedUsername || (s as any).username?.toLowerCase() === normalizedUsername;
     });
@@ -520,10 +596,12 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       return;
     }
 
+    // Verify password
     let valid = false;
     if (student.authHash && student.authSalt) {
       valid = verifyPassword(password, student.authHash, student.authSalt);
     } else {
+      // Default password is birthdate in ddmmyyyy format
       const defaultPass = (student.birthdate || '').replace(/\D/g, '');
       valid = password === defaultPass;
     }
@@ -544,7 +622,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       createdAt: Date.now(),
       expiresAt: Date.now() + 3 * 24 * 60 * 60 * 1000, // 3 days
     };
-    sessions.set(token, session);
+    await sessions.set(token, session);
 
     res.json({
       token,
@@ -562,19 +640,19 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   }
 
   res.status(400).json({ error: 'Vai trò đăng nhập không hợp lệ.' });
-});
+}));
 
 // Auth Logout
-app.post('/api/auth/logout', authMiddleware, (req: Request, res: Response) => {
+app.post('/api/auth/logout', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
   const token = req.headers.authorization?.substring(7);
   if (token) {
-    sessions.delete(token);
+    await sessions.delete(token);
   }
   res.json({ success: true });
-});
+}));
 
 // Change Teacher Password
-app.post('/api/auth/change-teacher-password', authMiddleware, teacherOnly, (req: Request, res: Response) => {
+app.post('/api/auth/change-teacher-password', authMiddleware, teacherOnly, asyncHandler(async (req: Request, res: Response) => {
   const { currentPassword, newPassword, confirmPassword } = req.body;
   if (!newPassword || newPassword.length < 6) {
     res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
@@ -584,6 +662,7 @@ app.post('/api/auth/change-teacher-password', authMiddleware, teacherOnly, (req:
     res.status(400).json({ error: 'Xác nhận mật khẩu mới không khớp.' });
     return;
   }
+  // If not initial setup, verify current password
   if (!db.adminAuth.isInitialPassword) {
     const isValid = verifyPassword(currentPassword, db.adminAuth.hash, db.adminAuth.salt);
     if (!isValid) {
@@ -603,14 +682,14 @@ app.post('/api/auth/change-teacher-password', authMiddleware, teacherOnly, (req:
 
   // Invalidate other sessions
   const currentToken = req.headers.authorization?.substring(7);
-  for (const [t, s] of sessions.entries()) {
-    if (s.role === 'teacher' && t !== currentToken) {
-      sessions.delete(t);
+  for (const [t, s] of await sessions.entries()) {
+    if (s.role === 'teacher' && t !== (sessionConfig() ? sessionId(currentToken || '') : currentToken)) {
+      await sessions.deleteEntry(t);
     }
   }
 
   res.json({ success: true, message: 'Đổi mật khẩu GVCN thành công.' });
-});
+}));
 
 // Change Student Password
 app.post('/api/auth/change-student-password', authMiddleware, (req: Request, res: Response) => {
@@ -658,7 +737,7 @@ app.post('/api/auth/change-student-password', authMiddleware, (req: Request, res
 });
 
 // Teacher resets student password
-app.post('/api/students/:id/reset-password', authMiddleware, teacherOnly, (req: Request, res: Response) => {
+app.post('/api/students/:id/reset-password', authMiddleware, teacherOnly, asyncHandler(async (req: Request, res: Response) => {
   const student = db.students.find(s => s.id === req.params.id);
   if (!student) {
     res.status(404).json({ error: 'Không tìm thấy học sinh.' });
@@ -672,9 +751,9 @@ app.post('/api/students/:id/reset-password', authMiddleware, teacherOnly, (req: 
   saveDatabase(db);
 
   // Invalidate any active sessions of this student
-  for (const [t, s] of sessions.entries()) {
+  for (const [t, s] of await sessions.entries()) {
     if (s.studentId === student.id) {
-      sessions.delete(t);
+      await sessions.deleteEntry(t);
     }
   }
 
@@ -682,10 +761,11 @@ app.post('/api/students/:id/reset-password', authMiddleware, teacherOnly, (req: 
     success: true,
     message: `Đã đặt lại mật khẩu về ngày sinh (${defaultPass}). Học sinh sẽ được yêu cầu đổi lại sau khi đăng nhập.`,
   });
-});
+}));
 
 // --- Public/Bootstrap Data Endpoint for App Initial Load ---
 app.get('/api/bootstrap', (req: Request, res: Response) => {
+  // Public data accessible on login screen & initial setup
   res.json({
     classSettings: {
       appName: db.classSettings.appName,
@@ -711,6 +791,7 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
   const user = (req as any).user as Session;
 
   if (user.role === 'teacher') {
+    // Return full teacher view
     res.json({
       role: 'teacher',
       classSettings: db.classSettings,
@@ -744,12 +825,14 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
   }
 
   if (user.role === 'student') {
+    // Student can ONLY access their own data and published class items!
     const student = db.students.find(s => s.id === user.studentId);
     if (!student) {
       res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh.' });
       return;
     }
 
+    // Filter attendance for this student only
     const studentAttendance: Record<string, string> = {};
     for (const [date, rec] of Object.entries(db.attendance)) {
       if (rec[student.id]) {
@@ -757,6 +840,7 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
       }
     }
 
+    // Filter grades for this student only
     const studentGrades: Record<string, Record<string, number | null>> = {};
     for (const [month, monthRec] of Object.entries(db.grades)) {
       if (monthRec[student.id]) {
@@ -764,6 +848,7 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
       }
     }
 
+    // Filter incidents visible to student (exclude private teacher notes)
     const studentIncidents = db.incidents
       .filter(inc => inc.studentId === student.id && inc.visibleToStudent !== false)
       .map(inc => ({
@@ -776,8 +861,13 @@ app.get('/api/state', authMiddleware, (req: Request, res: Response) => {
         recordedBy: inc.recordedBy,
       }));
 
+    // Announcements: only published ones
     const publishedAnnouncements = db.announcements.filter(a => a.isPublished);
+
+    // Seating chart: only if published
     const seatingChart = db.seatingChart.isPublished ? db.seatingChart : null;
+
+    // Honors: only published ones
     const publishedHonors = db.honors.filter(h => h.isPublished);
 
     const { authHash, authSalt, internalNotes, ...safeStudent } = student;
@@ -828,6 +918,7 @@ app.put('/api/settings/general', authMiddleware, teacherOnly, (req: Request, res
   res.json({ success: true, classSettings: db.classSettings });
 });
 
+// Emulation Rules & Thresholds
 app.put('/api/settings/emulation', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const { rules, settings } = req.body;
   if (rules && Array.isArray(rules)) {
@@ -854,6 +945,7 @@ app.put('/api/settings/emulation', authMiddleware, teacherOnly, (req: Request, r
   });
 });
 
+// Subjects Management
 app.put('/api/settings/subjects', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const { subjects } = req.body;
   if (!Array.isArray(subjects) || subjects.length === 0) {
@@ -873,13 +965,14 @@ app.post('/api/students', authMiddleware, teacherOnly, (req: Request, res: Respo
     return;
   }
 
+  // Check unique student code
   const existing = db.students.find(s => s.code.toLowerCase() === code.trim().toLowerCase());
   if (existing) {
     res.status(400).json({ error: `Mã hồ sơ ${code} đã tồn tại trong lớp.` });
     return;
   }
 
-  const cleanDob = birthdate.replace(/\D/g, '');
+  const cleanDob = birthdate.replace(/\D/g, ''); // ddmmyyyy
   const defaultPass = cleanDob;
   const { hash, salt } = hashPassword(defaultPass);
 
@@ -908,8 +1001,8 @@ app.post('/api/students', authMiddleware, teacherOnly, (req: Request, res: Respo
   res.json({ success: true, student: safe });
 });
 
-// Batch Import Students
-app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Request, res: Response) => {
+// Batch Import Students (Supports both 'replace' and 'append' modes)
+app.post('/api/students/batch-import', authMiddleware, teacherOnly, asyncHandler(async (req: Request, res: Response) => {
   const { students, mode = 'replace', updateExisting = true } = req.body;
   if (!Array.isArray(students) || students.length === 0) {
     res.status(400).json({ error: 'Không có dữ liệu học sinh để nhập.' });
@@ -921,6 +1014,8 @@ app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Reques
   const errors: string[] = [];
 
   if (mode === 'replace') {
+    // Mode 1: Thay thế toàn bộ danh sách lớp
+    // Map existing students by code to preserve IDs / credentials where applicable
     const existingMap = new Map(db.students.map(s => [s.code.trim().toLowerCase(), s]));
     const newStudentsList: typeof db.students = [];
 
@@ -973,13 +1068,15 @@ app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Reques
       }
     });
 
+    // Invalidate sessions of students no longer in roster
     const newIds = new Set(newStudentsList.map(s => s.id));
-    for (const [t, s] of sessions.entries()) {
+    for (const [t, s] of await sessions.entries()) {
       if (s.studentId && !newIds.has(s.studentId)) {
-        sessions.delete(t);
+        await sessions.deleteEntry(t);
       }
     }
 
+    // Clean up seating chart assignments for removed students
     if (db.seatingChart && db.seatingChart.seats) {
       for (const [k, sId] of Object.entries(db.seatingChart.seats)) {
         if (sId && !newIds.has(sId)) {
@@ -990,6 +1087,7 @@ app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Reques
 
     db.students = newStudentsList;
   } else {
+    // Mode 2: Bổ sung vào danh sách hiện có
     students.forEach((item, index) => {
       const rowNum = index + 2;
       if (!item.code || !item.fullName || !item.birthdate) {
@@ -1051,8 +1149,9 @@ app.post('/api/students/batch-import', authMiddleware, teacherOnly, (req: Reques
     errors,
     totalStudents: db.students.length,
   });
-});
+}));
 
+// Update Student
 app.put('/api/students/:id', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const index = db.students.findIndex(s => s.id === req.params.id);
   if (index === -1) {
@@ -1089,6 +1188,7 @@ app.put('/api/students/:id', authMiddleware, teacherOnly, (req: Request, res: Re
   res.json({ success: true, student: safe });
 });
 
+// Delete Student
 app.delete('/api/students/:id', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const studentId = req.params.id;
   const index = db.students.findIndex(s => s.id === studentId);
@@ -1099,19 +1199,21 @@ app.delete('/api/students/:id', authMiddleware, teacherOnly, (req: Request, res:
 
   db.students.splice(index, 1);
 
+  // Clean attendance
   for (const date of Object.keys(db.attendance)) {
     delete db.attendance[date][studentId];
   }
+  // Clean grades
   for (const month of Object.keys(db.grades)) {
     delete db.grades[month][studentId];
   }
+  // Clean incidents
   db.incidents = db.incidents.filter(inc => inc.studentId !== studentId);
 
-  if (db.seatingChart && db.seatingChart.seats) {
-    for (const [key, val] of Object.entries(db.seatingChart.seats)) {
-      if (val === studentId) {
-        db.seatingChart.seats[key] = null;
-      }
+  // Clean seating
+  for (const [key, val] of Object.entries(db.seatingChart.seats)) {
+    if (val === studentId) {
+      db.seatingChart.seats[key] = null;
     }
   }
 
@@ -1127,14 +1229,14 @@ app.post('/api/attendance', authMiddleware, teacherOnly, (req: Request, res: Res
     return;
   }
 
-  db.attendance[date] = records;
+  db.attendance[date] = records; // { [studentId]: "present" | "excused" | "unexcused" | "late" }
   saveDatabase(db);
   res.json({ success: true, attendance: db.attendance[date] });
 });
 
 // --- Grades Management ---
 app.put('/api/grades/month', authMiddleware, teacherOnly, (req: Request, res: Response) => {
-  const { month, grades } = req.body;
+  const { month, grades } = req.body; // grades: { [studentId]: { [subjectCode]: number | null } }
   if (!month || !grades) {
     res.status(400).json({ error: 'Thiếu tháng hoặc dữ liệu điểm.' });
     return;
@@ -1154,6 +1256,7 @@ app.put('/api/grades/month', authMiddleware, teacherOnly, (req: Request, res: Re
   res.json({ success: true, grades: db.grades[month] });
 });
 
+// Delete Monthly Grades with snapshot
 app.post('/api/grades/delete-month', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const { month } = req.body;
   if (!month || !db.grades[month]) {
@@ -1161,6 +1264,7 @@ app.post('/api/grades/delete-month', authMiddleware, teacherOnly, (req: Request,
     return;
   }
 
+  // Backup snapshot before delete
   const snapshotId = `snap_${Date.now()}`;
   db.gradeSnapshots.push({
     id: snapshotId,
@@ -1170,6 +1274,8 @@ app.post('/api/grades/delete-month', authMiddleware, teacherOnly, (req: Request,
   });
 
   delete db.grades[month];
+
+  // Remove corresponding honors if any
   db.honors = db.honors.filter(h => h.month !== month);
 
   saveDatabase(db);
@@ -1179,6 +1285,7 @@ app.post('/api/grades/delete-month', authMiddleware, teacherOnly, (req: Request,
   });
 });
 
+// Restore Monthly Grades from Snapshot
 app.post('/api/grades/restore-snapshot', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const { snapshotId } = req.body;
   const snapshot = db.gradeSnapshots.find(s => s.id === snapshotId);
@@ -1310,46 +1417,31 @@ app.delete('/api/announcements/:id', authMiddleware, teacherOnly, (req: Request,
 });
 
 // --- Seating Chart ---
-app.put('/api/seating', authMiddleware, teacherOnly, (req: Request, res: Response) => {
-  const { rows, desksPerRow, seatsPerDesk, seats } = req.body;
+app.put('/api/seating-chart', authMiddleware, teacherOnly, (req: Request, res: Response) => {
+  const { seats, isPublished } = req.body;
   db.seatingChart = {
     ...db.seatingChart,
-    rows: Number(rows) || db.seatingChart.rows,
-    desksPerRow: Number(desksPerRow) || db.seatingChart.desksPerRow,
-    seatsPerDesk: Number(seatsPerDesk) || db.seatingChart.seatsPerDesk,
-    seats: seats !== undefined ? seats : db.seatingChart.seats,
+    seats: seats || db.seatingChart.seats,
+    isPublished: isPublished !== undefined ? isPublished : db.seatingChart.isPublished,
     updatedAt: new Date().toISOString(),
   };
   saveDatabase(db);
   res.json({ success: true, seatingChart: db.seatingChart });
 });
 
-app.post('/api/seating/publish', authMiddleware, teacherOnly, (req: Request, res: Response) => {
-  const { isPublished } = req.body;
-  db.seatingChart.isPublished = !!isPublished;
-  db.seatingChart.updatedAt = new Date().toISOString();
-  saveDatabase(db);
-  res.json({ success: true, seatingChart: db.seatingChart });
-});
-
-// --- Honors Management ---
+// --- Honors / Vinh Danh ---
 app.post('/api/honors', authMiddleware, teacherOnly, (req: Request, res: Response) => {
-  const { title, month, studentIds, notes } = req.body;
-  if (!title || !studentIds || !Array.isArray(studentIds)) {
-    res.status(400).json({ error: 'Vui lòng nhập tiêu đề và danh sách học sinh được vinh danh.' });
-    return;
-  }
-
+  const { title, type, month, studentIds, notes, isPublished } = req.body;
   const honor = {
     id: `honor_${Date.now()}`,
-    title: title.trim(),
+    title: title?.trim() || 'Vinh danh tháng',
+    type: type || 'academic', // 'academic' (Top 5) or 'conduct' (Thi đua)
     month: month || '',
-    studentIds,
+    studentIds: studentIds || [],
     notes: notes || '',
-    isPublished: true,
+    isPublished: isPublished !== false,
     publishedAt: new Date().toISOString(),
   };
-
   db.honors.unshift(honor);
   saveDatabase(db);
   res.json({ success: true, honor });
@@ -1417,7 +1509,7 @@ app.post('/api/system/save-supabase-config', authMiddleware, teacherOnly, (req: 
   if (finalUrl) process.env.SUPABASE_URL = finalUrl;
   if (finalKey) process.env.SUPABASE_SERVICE_ROLE_KEY = finalKey;
 
-  // Persist to local .env (strictly ignored by git)
+  // Persist to local .env (which is strictly ignored by git)
   try {
     const envPath = path.resolve(process.cwd(), '.env');
     let envContent = '';
@@ -1439,7 +1531,7 @@ app.post('/api/system/save-supabase-config', authMiddleware, teacherOnly, (req: 
     lastSyncedAt: isEnabled ? new Date().toISOString() : null,
     syncStatus: isEnabled ? 'connected' : 'disabled',
   };
-  saveDatabase(db);
+  saveDatabase(db); // Note: saveDatabase scrubs serviceKey so it never touches db.json!
   res.json({
     success: true,
     supabaseConfig: {
@@ -1506,6 +1598,7 @@ app.post('/api/system/pull-supabase', authMiddleware, teacherOnly, async (req: R
 // Export Backup JSON
 app.get('/api/system/backup', authMiddleware, teacherOnly, (req: Request, res: Response) => {
   const backupData = JSON.parse(JSON.stringify(db));
+  // Remove secret keys from export
   delete backupData.supabaseConfig?.serviceKey;
   res.setHeader('Content-Disposition', `attachment; filename="backup_lop_${db.classSettings.className}_${Date.now()}.json"`);
   res.setHeader('Content-Type', 'application/json');
@@ -1519,6 +1612,7 @@ app.post('/api/system/restore', authMiddleware, teacherOnly, (req: Request, res:
     res.status(400).json({ error: 'Tệp sao lưu không đúng định dạng của Trợ lý chủ nhiệm.' });
     return;
   }
+  // Keep admin password and supabase secrets safe
   const currentAuth = db.adminAuth;
   const currentSupabase = db.supabaseConfig;
 
@@ -1544,14 +1638,16 @@ app.post('/api/system/clean-class', authMiddleware, teacherOnly, (req: Request, 
     return;
   }
 
+  // Backup current state to a safety file before purging
   const safetyBackupFile = path.join(DATA_DIR, `safety_backup_before_purge_${Date.now()}.json`);
   fs.writeFileSync(safetyBackupFile, JSON.stringify(db, null, 2), 'utf-8');
 
+  // Purge students, grades, attendance, incidents, seating, honors
   db.students = [];
   db.attendance = {};
   db.grades = {};
   db.incidents = [];
-  if (db.seatingChart) db.seatingChart.seats = {};
+  db.seatingChart.seats = {};
   db.honors = [];
   db.gradeSnapshots = [];
 
@@ -1606,6 +1702,7 @@ app.post('/api/system/seed-sample', authMiddleware, teacherOnly, (req: Request, 
     });
   });
 
+  // Sample attendance today
   const today = new Date().toISOString().split('T')[0];
   db.attendance[today] = {};
   db.students.forEach((s, idx) => {
@@ -1613,6 +1710,7 @@ app.post('/api/system/seed-sample', authMiddleware, teacherOnly, (req: Request, 
     else db.attendance[today][s.id] = 'present';
   });
 
+  // Sample announcements
   db.announcements = [
     {
       id: 'post_1',
@@ -1628,7 +1726,67 @@ app.post('/api/system/seed-sample', authMiddleware, teacherOnly, (req: Request, 
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     },
+    {
+      id: 'post_2',
+      title: 'Thi đua Tuần 6: Lớp xuất sắc xếp hạng Nhất',
+      content: 'Tuần 6 vừa qua, lớp chúng ta đã xuất sắc đạt 483,4 điểm xếp hạng I toàn trường 3 tuần liên tiếp! Biểu dương tinh thần tự giác nề nếp của tất cả các bạn.',
+      mediaUrl: '',
+      mediaType: '',
+      youtubeUrl: '',
+      driveUrl: '',
+      isPinned: false,
+      isPublished: true,
+      author: db.classSettings.homeroomTeacher || 'GVCN',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
   ];
+
+  // Sample grades for month 10
+  const curMonth = 'Tháng Mười';
+  db.grades[curMonth] = {};
+  db.students.forEach((s, i) => {
+    db.grades[curMonth][s.id] = {
+      TOAN: 8.5 + (i % 3) * 0.5,
+      VAN: 7.5 + (i % 4) * 0.5,
+      ANH: 8.0 + (i % 2) * 1.0,
+      KHTN: 8.0 + (i % 3) * 0.5,
+      LSDL: 8.5,
+      GDCD: 9.0,
+      TIN: 9.5,
+      CN: 8.5,
+    };
+  });
+
+  // Sample incidents
+  if (db.students.length > 2) {
+    db.incidents.push({
+      id: 'inc_sample_1',
+      studentId: db.students[7].id,
+      date: today,
+      type: 'violation',
+      ruleName: 'Nghỉ học có phép',
+      content: 'Phụ huynh xin phép cho em nghỉ ốm',
+      points: 0,
+      notes: 'Đã báo GVCN',
+      visibleToStudent: true,
+      recordedBy: db.classSettings.homeroomTeacher || 'GVCN',
+      createdAt: new Date().toISOString(),
+    });
+    db.incidents.push({
+      id: 'inc_sample_2',
+      studentId: db.students[8].id,
+      date: today,
+      type: 'violation',
+      ruleName: 'Không làm bài tập / không chép bài',
+      content: 'Thiếu vở bài tập môn Toán',
+      points: -3,
+      notes: 'Nhắc nhở nộp bù vào ngày mai',
+      visibleToStudent: true,
+      recordedBy: db.classSettings.homeroomTeacher || 'GVCN',
+      createdAt: new Date().toISOString(),
+    });
+  }
 
   saveDatabase(db);
   res.json({ success: true, message: 'Đã tạo dữ liệu mẫu thử nghiệm thành công.' });
